@@ -1,10 +1,11 @@
 import 'dotenv/config';
 import fetch from 'node-fetch';
 import { Telegraf } from 'telegraf';
+import http from 'node:http';
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN?.trim();
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY?.trim();
-const MODEL = process.env.MODEL?.trim() || 'openai/gpt-4o-mini'; // multimodal par défaut
+const MODEL = process.env.MODEL?.trim() || 'openai/gpt-4o-mini';
 const SYSTEM_PROMPT = "You are Adam_D'H7 a Friend to all";
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
@@ -15,7 +16,6 @@ if (!TELEGRAM_TOKEN || !OPENROUTER_API_KEY) {
 
 const bot = new Telegraf(TELEGRAM_TOKEN);
 
-// Helpers: get file path et download
 async function getFilePath(file_id) {
   const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/getFile?file_id=${file_id}`);
   const data = await res.json();
@@ -31,7 +31,6 @@ async function downloadTelegramFile(file_path) {
   return Buffer.from(arrayBuffer);
 }
 
-// Appel OpenRouter
 async function callOpenRouterAPI(body) {
   const res = await fetch(OPENROUTER_URL, {
     method: "POST",
@@ -44,15 +43,12 @@ async function callOpenRouterAPI(body) {
   return res.json();
 }
 
-// Parse response
 function extractTextFromOpenRouterResponse(data) {
   try {
     const choice = data?.choices?.[0];
     const message = choice?.message || choice?.delta || null;
     if (!message) return null;
-
     if (typeof message.content === 'string') return message.content;
-
     if (Array.isArray(message.content)) {
       let composed = '';
       for (const c of message.content) {
@@ -64,7 +60,6 @@ function extractTextFromOpenRouterResponse(data) {
       }
       if (composed) return composed;
     }
-
     if (message?.text) return message.text;
     if (choice?.text) return choice.text;
     if (data?.output?.text) return data.output.text;
@@ -75,7 +70,6 @@ function extractTextFromOpenRouterResponse(data) {
   }
 }
 
-// Main handler
 bot.on('message', async (ctx) => {
   try {
     const msg = ctx.message;
@@ -83,7 +77,6 @@ bot.on('message', async (ctx) => {
 
     const messages = [{ role: 'system', content: SYSTEM_PROMPT }];
 
-    // If reply, add context
     if (msg.reply_to_message) {
       const r = msg.reply_to_message;
       let summary = `Replied message from ${r.from?.first_name || 'user'}: `;
@@ -96,7 +89,6 @@ bot.on('message', async (ctx) => {
 
     const userText = (msg.text && msg.text.trim()) || (msg.caption && msg.caption.trim()) || '';
 
-    // Handle image (photo or image document)
     if (msg.photo || (msg.document && msg.document.mime_type && msg.document.mime_type.startsWith('image/'))) {
       let file_id;
       if (msg.photo) file_id = msg.photo[msg.photo.length - 1].file_id;
@@ -148,10 +140,37 @@ bot.on('message', async (ctx) => {
   }
 });
 
-// Launch
+const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
+const server = http.createServer((req, res) => {
+  if (req.url === '/health' || req.url === '/') {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('OK - Adam_DH7 bot is running');
+  } else {
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('Not Found');
+  }
+});
+
+server.listen(PORT, () => {
+  console.log(`HTTP health server listening on port ${PORT}`);
+});
+
 bot.launch()
-  .then(() => console.log('🤖 Bot Telegram AI ap kouri ak OpenRouter.'))
+  .then(() => console.log('Bot Telegram AI ap kouri ak OpenRouter.'))
   .catch(err => console.error('Bot launch error:', err));
 
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
+const shutdown = async () => {
+  console.log('Shutting down...');
+  try {
+    await bot.stop('SIGTERM');
+  } catch (e) { console.error('Error stopping bot:', e); }
+  server.close(() => {
+    console.log('HTTP server closed.');
+    process.exit(0);
+  });
+  setTimeout(() => process.exit(0), 5000);
+};
+
+process.once('SIGINT', shutdown);
+process.once('SIGTERM', shutdown);
+```0
