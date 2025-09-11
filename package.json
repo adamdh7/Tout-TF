@@ -1,0 +1,19 @@
+{
+  "name": "Adam_D'H7",
+  "version": "1.0.0",
+  "description": "Telegram bot ki konekte ak Google Gemini AI",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.2",
+    "node-fetch": "^3.3.2",
+    "telegraf": "^4.16.3"
+  },
+  "devDependencies": {},
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
