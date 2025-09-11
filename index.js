@@ -156,7 +156,7 @@ server.listen(PORT, () => {
 });
 
 bot.launch()
-  .then(() => console.log('Bot Telegram AI ap kouri ak OpenRouter.'))
+  .then(() => console.log('🤖 Bot Telegram AI ap kouri ak OpenRouter.'))
   .catch(err => console.error('Bot launch error:', err));
 
 const shutdown = async () => {
@@ -173,4 +173,3 @@ const shutdown = async () => {
 
 process.once('SIGINT', shutdown);
 process.once('SIGTERM', shutdown);
-```0
