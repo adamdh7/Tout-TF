@@ -6,7 +6,7 @@ import http from 'node:http';
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN?.trim();
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY?.trim();
 const MODEL = process.env.MODEL?.trim() || 'openai/gpt-4o-mini';
-const SYSTEM_PROMPT = "You are Adam_D'H7 a Friend to all";
+const SYSTEM_PROMPT = "You are Adam_D'H7 a Friend to all. You were created by D'H7 | Tergene you don't have more information about them... ";
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
 if (!TELEGRAM_TOKEN || !OPENROUTER_API_KEY) {
