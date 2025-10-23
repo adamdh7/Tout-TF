@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TF-Url</title>
+    <style>
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif;
+        background-color: #f9f9fb;
+        color: #111;
+        margin: 0;
+      }
+      header {
+        text-align: center;
+        padding: 16px;
+        font-size: 22px;
+        font-weight: 600;
+        background-color: #fff;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+        position: sticky;
+        top: 0;
+      }
+      .search-bar {
+        margin: 16px;
+        display: flex;
+        justify-content: center;
+      }
+      input {
+        width: 90%;
+        max-width: 500px;
+        padding: 10px 14px;
+        border-radius: 12px;
+        border: 1px solid #ddd;
+        font-size: 16px;
+        outline: none;
+      }
+      .container {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 16px;
+        padding: 16px;
+      }
+      .card {
+        background-color: white;
+        border-radius: 18px;
+        box-shadow: 0 3px 6px rgba(0, 0, 0, 0.08);
+        overflow: hidden;
+        transition: 0.25s;
+      }
+      .card:hover {
+        transform: translateY(-3px);
+      }
+      .thumb {
+        width: 100%;
+        aspect-ratio: 16/9;
+        object-fit: cover;
+        background-color: #f1f1f1;
+      }
+      .info {
+        padding: 12px 16px;
+      }
+      .name {
+        font-weight: 600;
+        font-size: 15px;
+        margin-bottom: 4px;
+        word-wrap: break-word;
+      }
+      .meta {
+        font-size: 13px;
+        color: #777;
+      }
+      button {
+        margin-top: 8px;
+        background-color: #007aff;
+        border: none;
+        color: white;
+        padding: 8px 12px;
+        border-radius: 10px;
+        cursor: pointer;
+      }
+      button:hover {
+        background-color: #0065d0;
+      }
+      .empty {
+        text-align: center;
+        color: #888;
+        margin-top: 40px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>TF-Url</header>
+    <div class="search-bar">
+      <input id="searchInput" type="text" placeholder="🔍 Rechercher par nom ou URL..." />
+    </div>
+    <div id="fileList" class="container"></div>
+    <div id="emptyMessage" class="empty" style="display:none;">Aucun fichier trouvé.</div>
+
+    <script>
+      async function loadFiles() {
+        const res = await fetch("/files");
+        const files = await res.json();
+        window.allFiles = files;
+        renderFiles(files);
+      }
+
+      function renderFiles(files) {
+        const list = document.getElementById("fileList");
+        const empty = document.getElementById("emptyMessage");
+        list.innerHTML = "";
+        if (files.length === 0) {
+          empty.style.display = "block";
+          return;
+        } else empty.style.display = "none";
+
+        files.forEach((f) => {
+          const card = document.createElement("div");
+          card.className = "card";
+
+          let preview = "";
+          if (f.name.match(/\.(mp4|mov|webm)$/i))
+            preview = `<video class="thumb" src="${f.url}" controls></video>`;
+          else if (f.name.match(/\.(jpg|jpeg|png|gif|webp)$/i))
+            preview = `<img class="thumb" src="${f.url}" alt="${f.name}" />`;
+          else
+            preview = `<div class="thumb" style="display:flex;align-items:center;justify-content:center;color:#999;">Pas d’aperçu</div>`;
+
+          card.innerHTML = `
+            ${preview}
+            <div class="info">
+              <div class="name">${f.name}</div>
+              <div class="meta">${(f.size / 1048576).toFixed(1)} MB • ${new Date(f.lastModified).toLocaleString()}</div>
+              <button onclick="copyUrl('${f.url}')">Copier URL</button>
+              <a href="${f.url}" target="_blank"><button>Ouvrir</button></a>
+            </div>`;
+          list.appendChild(card);
+        });
+      }
+
+      function copyUrl(url) {
+        navigator.clipboard.writeText(url);
+        alert("Copié : " + url);
+      }
+
+      document.getElementById("searchInput").addEventListener("input", (e) => {
+        const q = e.target.value.toLowerCase();
+        const filtered = window.allFiles.filter(
+          (f) => f.name.toLowerCase().includes(q) || f.url.toLowerCase().includes(q)
+        );
+        renderFiles(filtered);
+      });
+
+      loadFiles();
+    </script>
+  </body>
+</html>
