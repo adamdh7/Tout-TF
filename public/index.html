@@ -139,7 +139,7 @@
             <div class="info">
               <div class="name">${f.name}</div>
               <div class="meta">${(f.size / 1048576).toFixed(1)} MB • ${new Date(f.lastModified).toLocaleString()}</div>
-              <button onclick="copyUrl('${f.url}')">Copier URL</button>
+              <button onclick="copyUrl('${f.url}')">Copier</button>
               <a href="${f.url}" target="_blank"><button>Ouvrir</button></a>
             </div>`;
           list.appendChild(card);
@@ -148,7 +148,6 @@
 
       function copyUrl(url) {
         navigator.clipboard.writeText(url);
-        alert("Copié : " + url);
       }
 if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
