@@ -3,7 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>TF-Url</title>
+    <title>TF-Stream</title>
+    <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#2563eb" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="TF-Stream-Url" />
+  <link rel="apple-touch-icon" href="https://res.cloudinary.com/dckwrqrur/image/upload/v1755996395/tf-stream-url/tfstream-text-only_mo4wml.png" />
+  <script src="https://cdn.tailwindcss.com"></script>
     <style>
       body {
         font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif;
@@ -90,9 +98,9 @@
     </style>
   </head>
   <body>
-    <header>TF-Url</header>
+    <header>TF-Stream</header>
     <div class="search-bar">
-      <input id="searchInput" type="text" placeholder="🔍 Rechercher par nom ou URL..." />
+      <input id="searchInput" type="text" placeholder="Rechercher par nom ou URL..." />
     </div>
     <div id="fileList" class="container"></div>
     <div id="emptyMessage" class="empty" style="display:none;">Aucun fichier trouvé.</div>
@@ -142,7 +150,17 @@
         navigator.clipboard.writeText(url);
         alert("Copié : " + url);
       }
-
+if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js')
+          .then(reg => {
+            console.log('Service worker registered.', reg);
+          })
+          .catch(err => {
+            console.warn('Service worker registration failed:', err);
+          });
+      });
+      }
       document.getElementById("searchInput").addEventListener("input", (e) => {
         const q = e.target.value.toLowerCase();
         const filtered = window.allFiles.filter(
