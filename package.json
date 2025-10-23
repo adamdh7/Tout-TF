@@ -1,19 +1,30 @@
 {
-  "name": "Adam_D'H7",
+  "name": "r2-presign-ts",
   "version": "1.0.0",
-  "description": "Telegram bot ki konekte ak Google Gemini AI",
-  "main": "index.js",
-  "type": "module",
   "scripts": {
-    "start": "node index.js"
+    "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js"
   },
   "dependencies": {
-    "dotenv": "^17.2.2",
-    "node-fetch": "^3.3.2",
-    "telegraf": "^4.16.3"
+    "@aws-sdk/client-s3": "^3.914.0",
+    "@aws-sdk/lib-storage": "^3.914.0",
+    "@aws-sdk/s3-request-presigner": "^3.380.0",
+    "axios": "^1.12.2",
+    "busboy": "^1.6.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
+    "express": "^4.21.2",
+    "multer": "^2.0.2"
   },
-  "devDependencies": {},
+  "devDependencies": {
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.0.0"
+  },
+  "description": "",
+  "main": "server.js",
   "keywords": [],
   "author": "",
-  "license": "ISC"
+  "license": "ISC",
+  "type": "module"
 }
