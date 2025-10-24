@@ -1,70 +1,130 @@
 require('dotenv').config();
 const express = require('express');
-const morgan = require('morgan');
-const cors = require('cors');
-const helmet = require('helmet');
-const http = require('http');
 const { S3Client, ListObjectsV2Command } = require('@aws-sdk/client-s3');
-
 const app = express();
-app.use(helmet());
-app.use(cors());
-app.use(morgan('combined'));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
 const PORT = process.env.PORT || 3000;
-const HOST = '0.0.0.0';
-const SUFFIXES = ["", "2", "3"];
 
-function env(name, suffix = "") {
-  return process.env[`${name}${suffix}`] || "";
-}
-
+/**
+ * Normalize URL: remove surrounding quotes/whitespace, ensure http/https,
+ * trim duplicate slashes at end.
+ */
 function normalizePublicUrl(raw) {
-  if (!raw) return "";
-  let u = String(raw).trim().replace(/^["']|["']$/g, "").replace(/\s+/g, "");
-  u = u.replace(/^https::+/i, "https:").replace(/^http::+/i, "http:");
-  if (!/^https?:\/\//i.test(u)) u = "https://" + u;
-  u = u.replace(/^([^:\/?#]+):\/+/i, (m, p1) => p1.toLowerCase() + "://");
-  return u.replace(/\/+$/g, "");
+  if (!raw) return '';
+  let u = String(raw).trim().replace(/^["']|["']$/g, '').replace(/\s+/g, '');
+  // ensure scheme
+  if (!/^https?:\/\//i.test(u)) {
+    u = 'https://' + u;
+  }
+  // remove double slashes after protocol (e.g. "https:////")
+  u = u.replace(/^(https?:)\/+/i, (m, p1) => p1 + '//');
+  // remove trailing slashes
+  u = u.replace(/\/+$/g, '');
+  return u;
 }
 
-// joinUrl that encodes path segments safely (so slashes in keys are preserved)
+/**
+ * Join base + path safely
+ */
 function joinUrl(base, path) {
-  if (!base) return path ? `/${encodeURIComponent(path)}` : "";
-  const b = String(base).replace(/\/+$/g, "");
-  const pRaw = String(path || "").replace(/^\/+/g, "");
-  if (!pRaw) return b;
-  const segments = pRaw.split('/').map(s => encodeURIComponent(s));
-  return `${b}/${segments.join('/')}`;
+  if (!base) return path ? `${encodeURIComponent(path)}` : '';
+  const b = String(base).replace(/\/+$/g, '');
+  const p = String(path || '').replace(/^\/+/g, '');
+  return p ? `${b}/${encodeURIComponent(p)}` : b;
 }
 
-function makeConfigs() {
-  const cfgs = [];
-  for (const s of SUFFIXES) {
-    const bucket = env("R2_BUCKET", s);
-    const endpoint = env("R2_ENDPOINT", s);
-    const accessId = env("R2_ACCESS_KEY_ID", s);
-    const secret = env("R2_SECRET_ACCESS_KEY", s);
-    const region = env("R2_REGION", s) || "auto";
-    const publicUrl = normalizePublicUrl(env("R2_PUBLIC_URL", s));
-    const frontendOrigin = env("FRONTEND_ORIGIN", s) || "*";
-    const account = env("CF_ACCOUNT_ID", s) || "";
+/**
+ * Scan process.env for keys that look like R2 / RE sets.
+ *
+ * Supports patterns like:
+ *  - R2_BUCKET
+ *  - R2_BUCKET_2
+ *  - R2_2_BUCKET
+ *  - R2_ACCESS_KEY_ID_3
+ *  - RE_BUCKET_4
+ *
+ * Groups are keyed by `${prefix}${suffix ? '_' + suffix : ''}` (e.g. "R2", "R2_2")
+ */
+function makeConfigsFromEnv() {
+  const wantedProps = [
+    'BUCKET',
+    'ENDPOINT',
+    'ACCESS_KEY_ID',
+    'ACCESS_KEY',
+    'SECRET_ACCESS_KEY',
+    'SECRET',
+    'PUBLIC_URL',
+    'REGION',
+    'FRONTEND_ORIGIN',
+    'CF_ACCOUNT_ID',
+  ];
 
-    if (bucket && endpoint && accessId && secret) {
+  const groups = {}; // key -> { prefix, suffix, raw: {PROP: value, ...} }
+
+  for (const [k, v] of Object.entries(process.env)) {
+    // normalize key
+    const key = k.trim();
+
+    // Pattern A: PREFIX[_]PROP[_]SUFFIX  e.g. R2_BUCKET_2
+    let m = key.match(/^([A-Z0-9]+?)_([A-Z0-9_]+?)(?:_([0-9]+))?$/i);
+    if (m) {
+      const prefix = m[1];
+      const prop = m[2];
+      const suffix = m[3] || '';
+      // Accept only if prop is one we expect (or maps to one)
+      const up = prop.toUpperCase();
+      if (wantedProps.some(w => up === w || up === w.replace(/_/g, ''))) {
+        const groupKey = `${prefix}${suffix ? '_' + suffix : ''}`;
+        groups[groupKey] = groups[groupKey] || { prefix, suffix, raw: {} };
+        groups[groupKey].raw[up] = v;
+        continue;
+      }
+    }
+
+    // Pattern B: PREFIX[_]SUFFIX[_]PROP  e.g. R2_2_BUCKET or R2_2_ACCESS_KEY_ID
+    m = key.match(/^([A-Z0-9]+?)_([0-9]+)_([A-Z0-9_]+)$/i);
+    if (m) {
+      const prefix = m[1];
+      const suffix = m[2] || '';
+      const prop = m[3];
+      const up = prop.toUpperCase();
+      if (wantedProps.some(w => up === w || up === w.replace(/_/g, ''))) {
+        const groupKey = `${prefix}${suffix ? '_' + suffix : ''}`;
+        groups[groupKey] = groups[groupKey] || { prefix, suffix, raw: {} };
+        groups[groupKey].raw[up] = v;
+        continue;
+      }
+    }
+  }
+
+  // Map groups into final configs (try to be forgiving with property names)
+  const configs = [];
+  for (const [groupKey, info] of Object.entries(groups)) {
+    const r = info.raw;
+    // Normalize alternative names:
+    const accessKey = r.ACCESS_KEY_ID || r.ACCESS_KEY || r['ACCESSKEY'] || r['ACCESSKEYID'];
+    const secretKey = r.SECRET_ACCESS_KEY || r.SECRET || r['SECRETKEY'];
+    const bucket = r.BUCKET || r.BUCKET_NAME || r['BUCKETNAME'];
+    const endpoint = r.ENDPOINT;
+    const region = r.REGION || 'auto';
+    const publicUrl = normalizePublicUrl(r.PUBLIC_URL || r.PUBLICURL || r.PUBLIC);
+    const frontendOrigin = r.FRONTEND_ORIGIN || r.FRONTENDORIGIN || '*';
+    const account = r.CF_ACCOUNT_ID || r.CFACCOUNTID || null;
+
+    if (bucket && endpoint && accessKey && secretKey) {
       const client = new S3Client({
         region,
         endpoint,
         credentials: {
-          accessKeyId: accessId,
-          secretAccessKey: secret,
+          accessKeyId: accessKey,
+          secretAccessKey: secretKey,
         },
-        forcePathStyle: true, // helps with some S3-compatible endpoints
+        forcePathStyle: false,
       });
 
-      cfgs.push({
-        id: s || "1",
+      configs.push({
+        id: groupKey, // e.g. "R2", "R2_2", "RE_3"
+        prefix: info.prefix,
+        suffix: info.suffix,
         bucket,
         endpoint,
         publicUrl,
@@ -72,33 +132,38 @@ function makeConfigs() {
         frontendOrigin,
         account,
       });
+    } else {
+      // Keep a lightweight "error" representation so frontend can show misconfigured sets
+      configs.push({
+        id: groupKey,
+        prefix: info.prefix,
+        suffix: info.suffix,
+        error: `Missing required vars (need BUCKET, ENDPOINT, ACCESS_KEY_ID, SECRET_ACCESS_KEY). Found: ${Object.keys(r).join(', ')}`,
+        raw: r,
+      });
     }
   }
-  return cfgs;
+
+  // If nothing found, add fallback attempt using older SUFFIXES convention (empty set)
+  if (configs.length === 0) {
+    // no config discovered
+  }
+
+  return configs;
 }
 
-const configs = makeConfigs();
-if (!configs.length) {
-  console.warn('⚠️  Warning: no R2/S3 configs detected. Set env vars like R2_BUCKET, R2_ENDPOINT, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY.');
-}
+const configs = makeConfigsFromEnv();
 
-// serve static public (if you have a frontend build folder)
-app.use(express.static('public'));
+app.use(express.static('public', { extensions: ['html'] }));
 
-// health and root
-app.get('/healthz', (req, res) => res.send('ok'));
-app.get('/', (req, res) => {
-  res.send('Hello — server is up. Use /files or /files/:setId');
-});
-
-// list objects helper (returns array or array with single error-object)
 async function listFilesForConfig(cfg, maxKeys = 1000) {
+  if (cfg.error) return [{ set: cfg.id, bucket: cfg.bucket || null, error: cfg.error }];
   try {
     const data = await cfg.client.send(new ListObjectsV2Command({ Bucket: cfg.bucket, MaxKeys: maxKeys }));
     const contents = data.Contents || [];
     return contents.map((f) => {
       const key = String(f.Key);
-      const url = cfg.publicUrl ? joinUrl(cfg.publicUrl, key) : `/${encodeURIComponent(key)}`;
+      const url = cfg.publicUrl ? joinUrl(cfg.publicUrl, key) : `${encodeURIComponent(key)}`;
       return {
         set: cfg.id,
         account: cfg.account || null,
@@ -110,8 +175,7 @@ async function listFilesForConfig(cfg, maxKeys = 1000) {
       };
     });
   } catch (err) {
-    console.error(`Error listing bucket ${cfg.bucket} (set ${cfg.id}):`, err && err.message ? err.message : String(err));
-    return [{ set: cfg.id, bucket: cfg.bucket, error: String(err && err.message ? err.message : err) }];
+    return [{ set: cfg.id, bucket: cfg.bucket, error: String(err) }];
   }
 }
 
@@ -130,7 +194,6 @@ app.get('/files', async (req, res) => {
     const errorEntries = flat.filter((f) => f.error);
     res.json([...errorEntries, ...normalFiles]);
   } catch (err) {
-    console.error('GET /files failed:', err);
     res.status(500).json({ ok: false, error: String(err) });
   }
 });
@@ -138,8 +201,8 @@ app.get('/files', async (req, res) => {
 app.get('/files/:setId', async (req, res) => {
   try {
     const setId = req.params.setId;
-    const cfg = configs.find((c) => c.id === setId || (setId === "1" && c.id === "1"));
-    if (!cfg) return res.status(404).json({ ok: false, error: "set not found" });
+    const cfg = configs.find((c) => c.id === setId);
+    if (!cfg) return res.status(404).json({ ok: false, error: 'set not found' });
     const list = await listFilesForConfig(cfg);
     if (Array.isArray(list) && list.length === 1 && list[0].error) {
       return res.status(500).json({ ok: false, set: cfg.id, error: list[0].error });
@@ -151,39 +214,11 @@ app.get('/files/:setId', async (req, res) => {
     });
     res.json({ ok: true, set: cfg.id, files: list });
   } catch (err) {
-    console.error('GET /files/:setId failed:', err);
     res.status(500).json({ ok: false, error: String(err) });
   }
 });
 
-// create http server and handle timeouts
-const server = http.createServer(app);
-server.setTimeout(120000); // 2 minutes
-
-// global error handlers to avoid silent crash loops
-process.on('uncaughtException', (err) => {
-  console.error('uncaughtException:', err && err.stack ? err.stack : err);
-});
-process.on('unhandledRejection', (reason, p) => {
-  console.error('unhandledRejection at:', p, 'reason:', reason);
-});
-
-// graceful shutdown
-async function shutdown(sig) {
-  console.info(`Received ${sig}. Shutting down gracefully...`);
-  server.close(() => {
-    console.info('Closed http server.');
-    process.exit(0);
-  });
-  // force exit after 10s
-  setTimeout(() => {
-    console.error('Could not close connections in time, forcing shut down');
-    process.exit(1);
-  }, 10000);
-}
-process.on('SIGINT', () => shutdown('SIGINT'));
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-
-server.listen(PORT, HOST, () => {
-  console.log(`Server ready: http://localhost:${PORT}  (host bound ${HOST})`);
+app.listen(PORT, () => {
+  console.log(`Server ready: http://localhost:${PORT}`);
+  console.log('Discovered configs:', configs.map(c => ({ id: c.id, bucket: c.bucket, error: c.error ? true : false })));
 });
