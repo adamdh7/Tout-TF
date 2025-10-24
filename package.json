@@ -1,6 +1,9 @@
 {
   "name": "r2-presign-ts",
   "version": "1.0.0",
+  "description": "TF backend server",
+  "main": "server.js",
+  "type": "commonjs",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "build": "tsc",
@@ -12,8 +15,9 @@
     "@aws-sdk/s3-request-presigner": "^3.380.0",
     "axios": "^1.12.2",
     "busboy": "^1.6.0",
-     "morgan": "^1.10.0",
+    "morgan": "^1.10.0",
     "cors": "^2.8.5",
+    "helmet": "^7.1.0",
     "dotenv": "^16.6.1",
     "express": "^4.21.2",
     "multer": "^2.0.2"
@@ -22,10 +26,7 @@
     "ts-node-dev": "^2.0.0",
     "typescript": "^5.0.0"
   },
-  "description": "",
-  "main": "server.js",
   "keywords": [],
   "author": "",
-  "license": "ISC",
-  "type": "commonjs"
+  "license": "ISC"
 }
