@@ -5,170 +5,451 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>TF-Stream-7</title>
     <link rel="manifest" href="manifest.json" />
-  <meta name="theme-color" content="#2563eb" />
-  <meta name="mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="TF-Stream-7" />
-  <link rel="apple-touch-icon" href="https://res.cloudinary.com/dckwrqrur/image/upload/v1755996395/tf-stream-url/tfstream-text-only_mo4wml.png" />
-  <script src="https://cdn.tailwindcss.com"></script>
+    <meta name="theme-color" content="#2563eb" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="TF-Stream-7" />
+    <link rel="apple-touch-icon" href="https://res.cloudinary.com/dckwrqrur/image/upload/v1755996395/tf-stream-url/tfstream-text-only_mo4wml.png" />
+    <script src="https://cdn.tailwindcss.com"></script>
     <style>
-      body {
-        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif;
-        background-color: #f9f9fb;
-        color: #111;
-        margin: 0;
+      body { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif; background-color: #f9f9fb; color: #111; margin: 0; }
+      header { text-align: center; padding: 16px; font-size: 22px; font-weight: 600; background-color: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.05); position: sticky; top: 0; z-index: 10; }
+      .search-bar { margin: 16px; display:flex; justify-content:center; }
+      input { width: 90%; max-width:700px; padding:10px 14px; border-radius:12px; border:1px solid #ddd; font-size:16px; outline:none; }
+      .container { display:grid; grid-template-columns: repeat(auto-fit, minmax(280px,1fr)); gap:16px; padding:16px; }
+      .card { background:#fff; border-radius:18px; box-shadow:0 3px 6px rgba(0,0,0,0.08); overflow:hidden; transition:.25s; display:flex; flex-direction:column; }
+      .card:hover { transform: translateY(-3px); }
+      .thumb { width:100%; aspect-ratio: 16/9; object-fit:cover; background:#f1f1f1; }
+      .info { padding:12px 16px; display:flex; flex-direction:column; gap:8px; }
+
+      /* ========== IMPORTANT: long text handling ========== */
+      /* allow breaking inside long unbroken strings */
+      .name, .suburl, .group-title {
+        overflow-wrap: anywhere;
+        word-break: break-word;
+        -webkit-hyphens: auto;
+        hyphens: auto;
       }
-      header {
-        text-align: center;
-        padding: 16px;
-        font-size: 22px;
-        font-weight: 600;
-        background-color: #fff;
-        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-        position: sticky;
-        top: 0;
-      }
-      .search-bar {
-        margin: 16px;
-        display: flex;
-        justify-content: center;
-      }
-      input {
-        width: 90%;
-        max-width: 500px;
-        padding: 10px 14px;
-        border-radius: 12px;
-        border: 1px solid #ddd;
-        font-size: 16px;
-        outline: none;
-      }
-      .container {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-        gap: 16px;
-        padding: 16px;
-      }
-      .card {
-        background-color: white;
-        border-radius: 18px;
-        box-shadow: 0 3px 6px rgba(0, 0, 0, 0.08);
-        overflow: hidden;
-        transition: 0.25s;
-      }
-      .card:hover {
-        transform: translateY(-3px);
-      }
-      .thumb {
-        width: 100%;
-        aspect-ratio: 16/9;
-        object-fit: cover;
-        background-color: #f1f1f1;
-      }
-      .info {
-        padding: 12px 16px;
-      }
+
+      /* clamp name to 2 lines with ellipsis */
       .name {
-        font-weight: 600;
-        font-size: 15px;
-        margin-bottom: 4px;
-        word-wrap: break-word;
+        font-weight:600;
+        font-size:15px;
+        display:-webkit-box;
+        -webkit-line-clamp:2;
+        -webkit-box-orient:vertical;
+        overflow:hidden;
       }
-      .meta {
-        font-size: 13px;
-        color: #777;
+
+      /* clamp url to 3 lines */
+      .suburl {
+        font-size:11px;
+        color:#888;
+        word-break:break-word;
+        display:-webkit-box;
+        -webkit-line-clamp:3;
+        -webkit-box-orient:vertical;
+        overflow:hidden;
       }
-      button {
-        margin-top: 8px;
-        background-color: #007aff;
-        border: none;
-        color: white;
-        padding: 8px 12px;
-        border-radius: 10px;
-        cursor: pointer;
-      }
-      button:hover {
-        background-color: #0065d0;
-      }
-      .empty {
-        text-align: center;
-        color: #888;
-        margin-top: 40px;
-      }
+
+      /* group header title truncation */
+      .group-head { grid-column: 1 / -1; padding:8px 12px; background:rgba(0,0,0,0.03); border-radius:12px; font-weight:700; color:#222; display:flex; justify-content:space-between; align-items:center; gap:12px; }
+      .group-title { flex:1 1 auto; display:inline-block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+      .meta { font-size:13px; color:#777; }
+      .actions { display:flex; gap:8px; flex-wrap:wrap; }
+      button { background:#007aff; border:none; color:white; padding:8px 12px; border-radius:10px; cursor:pointer; }
+      button:hover { background:#0065d0; }
+      .small-btn { padding:6px 10px; font-size:13px; background:#111827; color:#fff; border-radius:8px; border:none; }
+      .empty { text-align:center; color:#888; margin-top:40px; }
+      .badge { background:#ef4444; color:#fff; padding:4px 8px; border-radius:999px; font-size:12px; font-weight:700; margin-left:8px; }
+      /* =================================================== */
     </style>
   </head>
   <body>
     <header>TF-Stream-7</header>
     <div class="search-bar">
-      <input id="searchInput" type="text" placeholder="Rechercher par nom ou URL..." />
+      <input id="searchInput" type="text" placeholder="Rechercher par nom, épisode, season, URL..." />
     </div>
+
     <div id="fileList" class="container"></div>
     <div id="emptyMessage" class="empty" style="display:none;">Aucun fichier trouvé.</div>
 
     <script>
-      async function loadFiles() {
-        const res = await fetch("/files");
-        const files = await res.json();
-        window.allFiles = files;
-        renderFiles(files);
+      // (le même script que avan — mwen pa chanje lojik parsing / tri a)
+      // CONFIG
+      const FILES_PATH = '/files';
+      const WS_PATH = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
+      const SSE_PATH = '/events';
+      const POLL_INTERVAL_MS = 12000;
+      const BATCH_FLUSH_MS = 700;
+      const CHUNK_SIZE = 50;
+      const MAX_RENDER = 1200;
+      const METADATA_CAP = 30000;
+
+      // STATE
+      window.allFiles = [];
+      window.viewFiles = [];
+      let ws = null, es = null, pollTimer = null, reconnectAttempts = 0;
+      let pendingMsgs = [];
+      let renderedCount = 0;
+      let sentinelObserver = null;
+
+      const toNum = v => (v === undefined || v === null) ? 0 : Number(v) || 0;
+      const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
+      function normalizeString(s) {
+        if (!s) return '';
+        try { s = s.normalize('NFKD').replace(/[\u0300-\u036f]/g, ''); } catch(e){}
+        try { s = s.replace(/[^\p{L}\p{N}]+/gu, ' '); } catch(e) { s = s.replace(/[^A-Za-z0-9]+/g, ' '); }
+        return s.replace(/\s+/g,' ').trim().toLowerCase();
       }
 
-      function renderFiles(files) {
-        const list = document.getElementById("fileList");
-        const empty = document.getElementById("emptyMessage");
-        list.innerHTML = "";
-        if (files.length === 0) {
-          empty.style.display = "block";
-          return;
-        } else empty.style.display = "none";
+      function stripPrefixes(noExt) {
+        if (!noExt) return '';
+        let s = noExt;
+        s = s.replace(/^[0-9]{6,}[_\-]*/, '');
+        s = s.replace(/^[\[\(\{][^\]\)\}]*[\]\)\}][_-\s]*/g, '');
+        s = s.replace(/^@[^_\-\s]+[_\-\s]*/g, '').replace(/^[_\-]+@[^_\-\s]+[_\-\s]*/g, '');
+        s = s.replace(/[_\-]*@[^_\s\-_]+[_\-]*/g, ' ');
+        s = s.replace(/[_\-\.\[\]\(\)]/g, ' ');
+        s = s.replace(/\s+/g, ' ').trim();
+        return s;
+      }
 
-        files.forEach((f) => {
-          const card = document.createElement("div");
-          card.className = "card";
+      function firstTokenIndex(noExt) {
+        const patterns = [
+          /(?:[_\s-]|^)(?:ep(?:isode)?|episode)[\W_]*0*\d+/i,
+          /(?:[_\s-]|^)[eE]0*\d+/i,
+          /[sS]0*\d+[^\d]*[eE]0*\d+/i,
+          /[eE]0*\d+[^\d]*[sS]0*\d+/i,
+          /(?:[_\s-]|^)(?:saison|season)[\W_]*0*\d+/i,
+          /(?:[_\s-]|^)[sS]0*\d+/i
+        ];
+        let minPos = -1;
+        for (const re of patterns) {
+          const pos = noExt.search(re);
+          if (pos >= 0) { if (minPos === -1 || pos < minPos) minPos = pos; }
+        }
+        return minPos;
+      }
 
-          let preview = "";
-          if (f.name.match(/\.(mp4|mov|webm)$/i))
-            preview = `<video class="thumb" src="${f.url}" controls></video>`;
-          else if (f.name.match(/\.(jpg|jpeg|png|gif|webp)$/i))
-            preview = `<img class="thumb" src="${f.url}" alt="${f.name}" />`;
-          else
-            preview = `<div class="thumb" style="display:flex;align-items:center;justify-content:center;color:#999;">Pas d’aperçu</div>`;
+      function extractBaseName(name) {
+        if (!name) return '';
+        const noExt = name.replace(/\.[^.]+$/, '');
+        const stripped = stripPrefixes(noExt);
+        const pos = firstTokenIndex(stripped);
+        const baseRaw = pos >= 0 ? stripped.slice(0, pos) : stripped;
+        return normalizeString(baseRaw || stripped);
+      }
 
-          card.innerHTML = `
-            ${preview}
-            <div class="info">
-              <div class="name">${f.name}</div>
-              <div class="meta">${(f.size / 1048576).toFixed(1)} MB • ${new Date(f.lastModified).toLocaleString()}</div>
-              <button onclick="copyUrl('${f.url}')">Copier</button>
-              <a href="${f.url}" target="_blank"><button>Ouvrir</button></a>
-            </div>`;
-          list.appendChild(card);
+      function parseParts(name) {
+        const noExt = (name || '').replace(/\.[^.]+$/, '');
+        const stripped = stripPrefixes(noExt);
+        const raw = stripped;
+
+        let season = null, ep = null, hasSeason = false, hasEp = false;
+
+        const seasonRegexes = [
+          /[sS]0*(\d{1,3})\b/g,
+          /\b(?:saison|season)[\W_]*0*(\d{1,3})/gi
+        ];
+        for (const re of seasonRegexes) {
+          const m = re.exec(raw);
+          if (m) { season = toNum(m[1]); hasSeason = true; break; }
+        }
+
+        const epRegexes = [
+          /[eE]0*(\d{1,3})\b/g,
+          /\b(?:ep(?:isode)?|episode)[\W_]*0*(\d{1,3})/i
+        ];
+        for (const re of epRegexes) {
+          const m = re.exec(raw);
+          if (m) { ep = toNum(m[1]); hasEp = true; break; }
+        }
+
+        if (hasEp && !hasSeason) season = 1;
+
+        const base = extractBaseName(name);
+        return { base, season, ep, hasSeason, hasEp, raw };
+      }
+
+      function intraGroupCompare(a, b) {
+        const pa = parseParts(a.name || '');
+        const pb = parseParts(b.name || '');
+
+        const aIsBaseOnly = (!pa.hasEp && pa.ep == null) && (!pa.hasSeason && pa.season == null);
+        const bIsBaseOnly = (!pb.hasEp && pb.ep == null) && (!pb.hasSeason && pb.season == null);
+        if (aIsBaseOnly && !bIsBaseOnly) return 1;
+        if (bIsBaseOnly && !aIsBaseOnly) return -1;
+
+        const sa = pa.season != null ? toNum(pa.season) : (pa.hasEp ? 1 : 0);
+        const sb = pb.season != null ? toNum(pb.season) : (pb.hasEp ? 1 : 0);
+        const ea = pa.ep != null ? toNum(pa.ep) : (pa.hasSeason ? 0 : 999999);
+        const eb = pb.ep != null ? toNum(pb.ep) : (pb.hasSeason ? 0 : 999999);
+
+        if (sa !== sb) return sa - sb;
+        if (ea !== eb) return ea - eb;
+
+        const lmA = toNum(a.lastModified), lmB = toNum(b.lastModified);
+        if (lmA !== lmB) return lmB - lmA;
+
+        const aNoExt = (a.name || '').replace(/\.[^.]+$/, '');
+        const bNoExt = (b.name || '').replace(/\.[^.]+$/, '');
+        return collator.compare(aNoExt, bNoExt);
+      }
+
+      function buildOrderedList(files) {
+        const groups = new Map();
+        (files || []).forEach(f => {
+          const base = extractBaseName(f.name || '') || (f.name || '').replace(/\.[^.]+$/, '');
+          if (!groups.has(base)) groups.set(base, []);
+          groups.get(base).push(f);
         });
+
+        const groupArr = Array.from(groups.entries()).map(([base, items]) => {
+          const newest = items.reduce((m, it) => Math.max(m, toNum(it.lastModified)), 0);
+          return { base, items, newest };
+        });
+
+        groupArr.sort((g1, g2) => toNum(g2.newest) - toNum(g1.newest));
+
+        const out = [];
+        for (const g of groupArr) {
+          g.items.sort(intraGroupCompare);
+
+          const mapEp = new Map();
+          for (const it of g.items) {
+            const p = parseParts(it.name || '');
+            const s = (p.season != null) ? p.season : (p.hasEp ? 1 : 'base');
+            const e = (p.ep != null) ? p.ep : (p.hasSeason ? 0 : 'base');
+            const key = (s === 'base') ? 'base' : `s${s}e${e}`;
+            if (!mapEp.has(key)) mapEp.set(key, []);
+            mapEp.get(key).push(it);
+          }
+          for (const [k, arr] of mapEp.entries()) {
+            arr.sort((x,y) => toNum(y.lastModified) - toNum(x.lastModified));
+            if (arr.length) arr[0].__isNewestForEpisode = true;
+            for (let i=1;i<arr.length;i++) arr[i].__isNewestForEpisode = false;
+          }
+
+          out.push({ __groupHeader: true, base: g.base, newest: g.newest });
+          for (const it of g.items) out.push(it);
+        }
+        return out;
       }
+
+      function escapeHtml(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+      function createCardElement(f, createVideo = true) {
+        if (f.__groupHeader) {
+          const head = document.createElement('div');
+          head.className = 'group-head';
+          const left = document.createElement('div'); left.className = 'group-title'; left.textContent = f.base ? f.base.replace(/\s+/g,' ') : '(sans nom)';
+          const right = document.createElement('div'); right.style.fontSize='13px'; right.style.color='#555'; right.textContent = f.newest ? ('Dernier upload : ' + new Date(Number(f.newest)).toLocaleString()) : '';
+          head.appendChild(left); head.appendChild(right);
+          return head;
+        }
+
+        const card = document.createElement('div'); card.className='card';
+        const isVideo = (f.name||'').match(/\.(mp4|mov|webm|mkv)$/i);
+        const isImage = (f.name||'').match(/\.(jpg|jpeg|png|gif|webp)$/i);
+
+        let preview;
+        if (isVideo && createVideo) {
+          const vid = document.createElement('video'); vid.className='thumb'; vid.src = f.url; vid.controls = true; vid.preload='metadata'; preview = vid;
+        } else if (isImage) {
+          const img = document.createElement('img'); img.className='thumb'; img.alt = f.name||''; img.src = f.url; preview = img;
+        } else if (isVideo && !createVideo) {
+          const div = document.createElement('div'); div.className='thumb'; div.style.display='flex'; div.style.alignItems='center'; div.style.justifyContent='center'; div.style.cursor='pointer'; div.textContent='Cliquer pour lire';
+          div.addEventListener('click', ()=>{ const vid=document.createElement('video'); vid.className='thumb'; vid.src=f.url; vid.controls=true; vid.preload='metadata'; div.replaceWith(vid); }, { once:true });
+          preview = div;
+        } else {
+          const div = document.createElement('div'); div.className='thumb'; div.style.display='flex'; div.style.alignItems='center'; div.style.justifyContent='center'; div.style.color='#999'; div.textContent='Pas d’aperçu'; preview = div;
+        }
+
+        const info = document.createElement('div'); info.className='info';
+        const nameDiv = document.createElement('div'); nameDiv.className='name'; nameDiv.innerHTML = escapeHtml(f.name || '');
+
+        if (f.__isNewestForEpisode) {
+          const badge = document.createElement('span'); badge.className='badge'; badge.textContent='NOUVO';
+          nameDiv.appendChild(badge);
+        }
+
+        const metaDiv = document.createElement('div'); metaDiv.className='meta';
+        const sizeMB = ((toNum(f.size)||0)/1048576).toFixed(1);
+        const lm = f.lastModified ? new Date(Number(f.lastModified)).toLocaleString() : '-';
+        metaDiv.textContent = `${sizeMB} MB • ${lm}`;
+
+        const actions = document.createElement('div'); actions.className='actions';
+        const copyBtn = document.createElement('button'); copyBtn.className='small-btn'; copyBtn.textContent='Copier URL'; copyBtn.addEventListener('click', ()=>copyUrl(f.url));
+        const openA = document.createElement('a'); openA.href = f.url; openA.target='_blank';
+        const openBtn = document.createElement('button'); openBtn.className='small-btn'; openBtn.textContent='Ouvrir'; openA.appendChild(openBtn);
+
+        const urlSpan = document.createElement('div'); urlSpan.className='suburl'; urlSpan.textContent = f.url || '';
+
+        actions.appendChild(copyBtn); actions.appendChild(openA);
+        info.appendChild(nameDiv); info.appendChild(metaDiv); info.appendChild(actions); info.appendChild(urlSpan);
+
+        card.appendChild(preview); card.appendChild(info);
+        return card;
+      }
+
+      function renderNextChunk() {
+        const listEl = document.getElementById('fileList');
+        const source = (window.viewFiles && window.viewFiles.length) ? window.viewFiles : buildOrderedList(window.allFiles || []);
+        if (renderedCount >= source.length) return;
+        const frag = document.createDocumentFragment();
+        const limit = Math.min(source.length, Math.min(MAX_RENDER, renderedCount + CHUNK_SIZE));
+        let videoCount = 0; const MAX_VIDEOS = 8;
+        for (let i = renderedCount; i < limit; i++) {
+          const f = source[i];
+          if (f.__groupHeader) { frag.appendChild(createCardElement(f, false)); continue; }
+          const isVideo = (f.name||'').match(/\.(mp4|mov|webm|mkv)$/i);
+          const createVideo = isVideo ? (videoCount < MAX_VIDEOS) : false;
+          const card = createCardElement(f, createVideo);
+          if (isVideo && createVideo) videoCount++;
+          frag.appendChild(card);
+        }
+        renderedCount = limit;
+        listEl.appendChild(frag);
+        updateEmpty();
+        updateSentinel();
+      }
+
+      function updateSentinel() {
+        const listEl = document.getElementById('fileList');
+        let sentinel = document.getElementById('render-sentinel');
+        if (!sentinel) {
+          sentinel = document.createElement('div'); sentinel.id='render-sentinel'; sentinel.style.width='1px'; sentinel.style.height='1px'; sentinel.style.opacity='0';
+          listEl.appendChild(sentinel); ensureSentinelObserver(); sentinelObserver.observe(sentinel);
+        } else listEl.appendChild(sentinel);
+      }
+
+      function ensureSentinelObserver() {
+        if (sentinelObserver) return;
+        sentinelObserver = new IntersectionObserver(entries => { entries.forEach(e => { if (e.isIntersecting) renderNextChunk(); }); }, { root:null, rootMargin:'600px', threshold:0.01 });
+      }
+
+      function updateEmpty() {
+        const empty = document.getElementById('emptyMessage');
+        const len = (window.viewFiles && window.viewFiles.length) ? window.viewFiles.filter(x=>!x.__groupHeader).length : buildOrderedList(window.allFiles || []).filter(x=>!x.__groupHeader).length;
+        empty.style.display = (len === 0) ? 'block' : 'none';
+      }
+
+      function fullRerender() { renderedCount=0; document.getElementById('fileList').innerHTML=''; renderNextChunk(); }
+
+      function applySearchAndRender() {
+        const q = (document.getElementById('searchInput').value || '').trim().toLowerCase();
+        const ordered = buildOrderedList(window.allFiles || []);
+        if (q) {
+          window.viewFiles = ordered.filter(f => {
+            if (f.__groupHeader) return (f.base||'').toLowerCase().includes(q);
+            return ((f.name||'').toLowerCase().includes(q) || (f.url||'').toLowerCase().includes(q) || (extractBaseName(f.name||'').toLowerCase().includes(q)));
+          });
+        } else window.viewFiles = [];
+        renderedCount=0; document.getElementById('fileList').innerHTML=''; renderNextChunk();
+      }
+      function debounce(fn, ms=150) { let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
+      document.getElementById('searchInput').addEventListener('input', debounce(applySearchAndRender, 140));
+
+      async function loadFiles() {
+        try {
+          const res = await fetch(FILES_PATH, { cache:'no-store' });
+          if (!res.ok) throw new Error('fetch failed');
+          const files = await res.json();
+          const normalized = (files||[]).map(f=>({ name:f.name, url:f.url, size:toNum(f.size), lastModified:toNum(f.lastModified), thumbnail:f.thumbnail||null }));
+          const seen = new Set(), unique = [];
+          for (const it of normalized) { if (!it.url) continue; if (!seen.has(it.url)){ seen.add(it.url); unique.push(it); } }
+          window.allFiles = unique.slice(0, METADATA_CAP);
+          fullRerender();
+        } catch(e){ console.warn('loadFiles error', e); }
+      }
+
+      function handleServerMsg(msg) {
+        if (!msg || !msg.type) return;
+        if (msg.type === 'full' && Array.isArray(msg.files)) {
+          const arr = msg.files.map(f=>({ name:f.name, url:f.url, size:toNum(f.size), lastModified:toNum(f.lastModified), thumbnail:f.thumbnail||null }));
+          const seen = new Set(), unique = [];
+          for (const it of arr) { if (!it.url) continue; if (!seen.has(it.url)){ seen.add(it.url); unique.push(it); } }
+          window.allFiles = unique.slice(0, METADATA_CAP);
+          fullRerender();
+        } else if ((msg.type === 'add' || msg.type === 'update') && msg.file) {
+          const file = { name: msg.file.name, url: msg.file.url, size: toNum(msg.file.size), lastModified: toNum(msg.file.lastModified), thumbnail: msg.file.thumbnail||null };
+          const idx = (window.allFiles||[]).findIndex(x => x.url === file.url);
+          if (idx >= 0) window.allFiles[idx] = file; else window.allFiles.unshift(file);
+          if (window.allFiles.length > METADATA_CAP) window.allFiles.length = METADATA_CAP;
+          fullRerender();
+        } else if (msg.type === 'remove') {
+          const ident = msg.url || msg.name;
+          window.allFiles = (window.allFiles||[]).filter(x => x.url !== ident);
+          fullRerender();
+        } else if (msg.type === 'notify' && Array.isArray(msg.files)) {
+          const arr = msg.files.map(f=>({ name:f.name, url:f.url, size:toNum(f.size), lastModified:toNum(f.lastModified), thumbnail:f.thumbnail||null }));
+          const seen = new Set(), unique = [];
+          for (const it of arr) { if (!it.url) continue; if (!seen.has(it.url)){ seen.add(it.url); unique.push(it); } }
+          window.allFiles = unique.slice(0, METADATA_CAP);
+          fullRerender();
+        }
+      }
+
+      function bufferAndFlush(msg) { pendingMsgs.push(msg); }
+      setInterval(()=> {
+        if (!pendingMsgs.length) return;
+        const batch = pendingMsgs.splice(0, pendingMsgs.length);
+        for (const m of batch) try { handleServerMsg(m); } catch(e){ console.warn('handleServerMsg error', e); }
+      }, BATCH_FLUSH_MS);
+
+      function connectWebSocket() {
+        try { ws = new WebSocket(WS_PATH); } catch(e){ ws=null; startSSE(); startPolling(); return; }
+        ws.addEventListener('open', ()=>{ reconnectAttempts=0; try{ ws.send(JSON.stringify({ type:'subscribe', channel:'files' })); } catch(e){} });
+        ws.addEventListener('message', ev=>{ try{ const msg = JSON.parse(ev.data); bufferAndFlush(msg); } catch(e){ console.warn('ws parse', e); } });
+        ws.addEventListener('close', ()=>{ ws=null; startSSE(); scheduleReconnect(); });
+        ws.addEventListener('error', ()=>{ try{ ws.close(); } catch(e){} });
+      }
+      function scheduleReconnect(){ reconnectAttempts++; const delay = Math.min(30000, 1000 * Math.pow(1.6, Math.min(10, reconnectAttempts))); setTimeout(()=>{ if (!ws) connectWebSocket(); }, delay); }
+
+      function startSSE() {
+        if (typeof EventSource === 'undefined') { startPolling(); return; }
+        if (es) return;
+        try { es = new EventSource(SSE_PATH); } catch(e){ es=null; startPolling(); return; }
+        es.onmessage = ev => { try{ const msg = JSON.parse(ev.data); bufferAndFlush(msg); } catch(e){ console.warn('sse parse', e); } };
+        es.onerror = ()=>{ try{ es.close(); } catch(e){} es=null; startPolling(); };
+      }
+
+      function startPolling() {
+        if (pollTimer) return;
+        pollTimer = setInterval(()=> {
+          fetch(FILES_PATH, { cache:'no-store' })
+            .then(res => res.ok ? res.json() : Promise.reject('err'))
+            .then(files => {
+              const arr = (files||[]).map(f=>({ name:f.name, url:f.url, size:toNum(f.size), lastModified:toNum(f.lastModified), thumbnail:f.thumbnail||null }));
+              const seen = new Set(), unique = [];
+              for (const it of arr) { if (!it.url) continue; if (!seen.has(it.url)){ seen.add(it.url); unique.push(it); } }
+              window.allFiles = unique.slice(0, METADATA_CAP);
+              fullRerender();
+            }).catch(()=>{});
+        }, POLL_INTERVAL_MS);
+      }
+      function stopPolling(){ if (pollTimer) { clearInterval(pollTimer); pollTimer=null; } }
 
       function copyUrl(url) {
-        navigator.clipboard.writeText(url);
+        if (!url) return;
+        if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(url).catch(()=>{}); }
+        else { const ta=document.createElement('textarea'); ta.value=url; document.body.appendChild(ta); ta.select(); try{ document.execCommand('copy'); } catch(e){} ta.remove(); }
       }
-if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('sw.js')
-          .then(reg => {
-            console.log('Service worker registered.', reg);
-          })
-          .catch(err => {
-            console.warn('Service worker registration failed:', err);
-          });
-      });
-      }
-      document.getElementById("searchInput").addEventListener("input", (e) => {
-        const q = e.target.value.toLowerCase();
-        const filtered = window.allFiles.filter(
-          (f) => f.name.toLowerCase().includes(q) || f.url.toLowerCase().includes(q)
-        );
-        renderFiles(filtered);
-      });
+      window.copyUrl = copyUrl;
 
-      loadFiles();
+      (function init(){ loadFiles(); connectWebSocket(); setTimeout(()=>{ if (!ws) startSSE(); }, 1500); setTimeout(()=>{ if (!ws && !es) startPolling(); }, 2500);
+        window.addEventListener('beforeunload', ()=>{ try{ if (ws) ws.close(); } catch(e){} try{ if (es) es.close(); } catch(e){} stopPolling(); });
+      })();
+
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', ()=> {
+          navigator.serviceWorker.register('sw.js').then(reg=>{ console.log('Service worker registered.', reg); }).catch(err=>{ console.warn('Service worker registration failed:', err); });
+        });
+      }
     </script>
   </body>
 </html>
