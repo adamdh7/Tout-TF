@@ -64,6 +64,24 @@
       .small-btn { padding:6px 10px; font-size:13px; background:#111827; color:#fff; border-radius:8px; border:none; }
       .empty { text-align:center; color:#888; margin-top:40px; }
       .badge { background:#ef4444; color:#fff; padding:4px 8px; border-radius:999px; font-size:12px; font-weight:700; margin-left:8px; }
+
+      /* ====== Styles pour le bouton "Copier tout" dans l'en-tête de groupe ====== */
+      .group-head .group-right { display:flex; align-items:center; gap:8px; flex-shrink:0; }
+      .copy-all-btn {
+        padding: 6px 10px;
+        font-size: 13px;
+        background: #111827;
+        color: #fff;
+        border-radius: 8px;
+        border: none;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        white-space: nowrap;
+      }
+      .copy-all-btn.copied { background: #10b981; transition: background 180ms; }
+      .copy-all-btn .icon { font-size: 12px; opacity: 0.95; }
       /* =================================================== */
     </style>
   </head>
@@ -77,7 +95,6 @@
     <div id="emptyMessage" class="empty" style="display:none;">Aucun fichier trouvé.</div>
 
     <script>
-      // (le même script que avan — mwen pa chanje lojik parsing / tri a)
       // CONFIG
       const FILES_PATH = '/files';
       const WS_PATH = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
@@ -242,15 +259,171 @@
 
       function escapeHtml(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
-      function createCardElement(f, createVideo = true) {
-        if (f.__groupHeader) {
-          const head = document.createElement('div');
-          head.className = 'group-head';
-          const left = document.createElement('div'); left.className = 'group-title'; left.textContent = f.base ? f.base.replace(/\s+/g,' ') : '(sans nom)';
-          const right = document.createElement('div'); right.style.fontSize='13px'; right.style.color='#555'; right.textContent = f.newest ? ('Dernier upload : ' + new Date(Number(f.newest)).toLocaleString()) : '';
-          head.appendChild(left); head.appendChild(right);
-          return head;
+      /* ====== Fonctions ajoutées pour "Copier tout" ====== */
+      function copyText(text) {
+        if (!text) return;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).catch(() => {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.left = '-9999px';
+            document.body.appendChild(ta);
+            ta.select();
+            try { document.execCommand('copy'); } catch (e) {}
+            ta.remove();
+          });
+        } else {
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          ta.style.position = 'fixed';
+          ta.style.left = '-9999px';
+          document.body.appendChild(ta);
+          ta.select();
+          try { document.execCommand('copy'); } catch (e) {}
+          ta.remove();
         }
+      }
+
+      /**
+       * Nouveau copyGroup :
+       * - récupère le fichier le plus récent par saison/épisode
+       * - trie par saison asc, épisode asc
+       * - génère le texte au format demandé :
+       *   Name_ep{EP}_s{SEASON}
+       *   <nom complet>
+       *   Url
+       *   <url>
+       *
+       * - les fichiers "base" (sans saison/épisode) sont ajoutés à la fin sous "Name_base"
+       */
+      function copyGroup(base) {
+        if (!base) return;
+        // trouver tous les fichiers du groupe
+        const files = (window.allFiles || []).filter(f => {
+          try { return extractBaseName(f.name || '') === base; } catch (e) { return false; }
+        }).filter(f => f.url);
+
+        if (!files.length) {
+          copyText(`Aucun fichier trouvé pour: ${base}`);
+          return;
+        }
+
+        // Map des épisodes -> garder le plus récent
+        const epMap = new Map(); // key -> {file, season, ep}
+        const baseFiles = []; // fichiers sans saison/ép
+
+        for (const f of files) {
+          const p = parseParts(f.name || '');
+          let season = (p.season != null) ? p.season : (p.hasEp ? 1 : null);
+          let ep = (p.ep != null) ? p.ep : null;
+
+          if (season === null && ep === null) {
+            baseFiles.push({ f, p });
+            continue;
+          }
+
+          // normalize numbers
+          season = season == null ? 0 : Number(season);
+          ep = ep == null ? 0 : Number(ep);
+
+          const key = `s${season}e${ep}`;
+          const existing = epMap.get(key);
+          if (!existing) epMap.set(key, { file: f, season, ep });
+          else {
+            // garder le plus récent selon lastModified
+            if (toNum(f.lastModified) > toNum(existing.file.lastModified)) {
+              epMap.set(key, { file: f, season, ep });
+            }
+          }
+        }
+
+        // trier les clés par saison asc, episode asc
+        const sortedKeys = Array.from(epMap.keys()).sort((a,b) => {
+          const ma = a.match(/^s(\d+)e(\d+)$/);
+          const mb = b.match(/^s(\d+)e(\d+)$/);
+          const sa = ma ? Number(ma[1]) : 0;
+          const ea = ma ? Number(ma[2]) : 0;
+          const sb = mb ? Number(mb[1]) : 0;
+          const eb = mb ? Number(mb[2]) : 0;
+          if (sa !== sb) return sa - sb;
+          return ea - eb;
+        });
+
+        // construire la sortie
+        let out = '';
+        for (const k of sortedKeys) {
+          const item = epMap.get(k);
+          if (!item) continue;
+          const season = item.season;
+          const ep = item.ep;
+          // format demandé (on suit l'exemple "Name_ep{ep}_s{season}")
+          const labelName = `ep${ep}_s${season}`;
+          out += `${labelName}\n${item.file.name || '(sans nom)'}\nUrl\n${item.file.url || ''}\n\n`;
+        }
+
+        // ajouter les base files (ceux sans saison/ep) à la fin
+        // garder seulement le plus récent par nom/url (util)
+        if (baseFiles.length) {
+          // on trie par lastModified décroissant puis prend tous (ou tu peux filtrer)
+          baseFiles.sort((a,b) => toNum(b.f.lastModified) - toNum(a.f.lastModified));
+          for (const bf of baseFiles) {
+            const labelName = `Name_base`;
+            out += `${labelName}\n${bf.f.name || '(sans nom)'}\nUrl\n${bf.f.url || ''}\n\n`;
+          }
+        }
+
+        copyText(out.trim());
+      }
+
+      function createGroupHeader(f) {
+        const head = document.createElement('div');
+        head.className = 'group-head';
+
+        const left = document.createElement('div');
+        left.className = 'group-title';
+        left.textContent = f.base ? f.base.replace(/\s+/g,' ') : '(sans nom)';
+        head.appendChild(left);
+
+        const rightWrap = document.createElement('div');
+        rightWrap.className = 'group-right';
+
+        const right = document.createElement('div');
+        right.style.fontSize = '13px';
+        right.style.color = '#555';
+        right.style.whiteSpace = 'nowrap';
+        right.style.marginLeft = '8px';
+        right.textContent = f.newest ? ('Dernier upload : ' + new Date(Number(f.newest)).toLocaleString()) : '';
+        rightWrap.appendChild(right);
+
+        const copyAllBtn = document.createElement('button');
+        copyAllBtn.className = 'copy-all-btn';
+        copyAllBtn.type = 'button';
+        copyAllBtn.title = 'Copier tous les Name_epX_sY + Url de ce groupe (format prédéfini)';
+        copyAllBtn.innerHTML = '<span class="icon"></span><span>Copier tout</span>';
+
+        copyAllBtn.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          try { copyGroup(f.base); } catch (e) { console.warn('copyGroup error', e); }
+
+          copyAllBtn.classList.add('copied');
+          const old = copyAllBtn.innerHTML;
+          copyAllBtn.innerHTML = '<span class="icon"></span><span>Copié</span>';
+          setTimeout(() => {
+            copyAllBtn.classList.remove('copied');
+            copyAllBtn.innerHTML = old;
+          }, 1200);
+        });
+
+        rightWrap.appendChild(copyAllBtn);
+        head.appendChild(rightWrap);
+
+        return head;
+      }
+      /* ====== Fin des fonctions "Copier tout" ====== */
+
+      function createCardElement(f, createVideo = true) {
+        if (f.__groupHeader) return createGroupHeader(f);
 
         const card = document.createElement('div'); card.className='card';
         const isVideo = (f.name||'').match(/\.(mp4|mov|webm|mkv)$/i);
@@ -452,4 +625,4 @@
       }
     </script>
   </body>
-</html>
+  </html>
