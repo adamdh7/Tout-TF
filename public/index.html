@@ -21,41 +21,33 @@
       .card { background:#fff; border-radius:18px; box-shadow:0 3px 6px rgba(0,0,0,0.08); overflow:hidden; transition:.25s; display:flex; flex-direction:column; }
       .card:hover { transform: translateY(-3px); }
       .thumb { width:100%; aspect-ratio: 16/9; object-fit:cover; background:#f1f1f1; }
-      .info { padding:12px 16px; display:flex; flex-direction:column; gap:8px; }
+      .info { padding:12px 16px; display:flex; flex-direction:column; gap:8px; }  /* ========== IMPORTANT: long text handling ========== */
 
-      /* ========== IMPORTANT: long text handling ========== */
-      /* allow breaking inside long unbroken strings */
+      /* allow breaking inside long unbroken strings by inserting soft breaks via JS */
       .name, .suburl, .group-title {
         overflow-wrap: anywhere;
         word-break: break-word;
         -webkit-hyphens: auto;
         hyphens: auto;
+        white-space: normal;
       }
 
-      /* clamp name to 2 lines with ellipsis */
+      /* full name display (no clamp) */
       .name {
         font-weight:600;
         font-size:15px;
-        display:-webkit-box;
-        -webkit-line-clamp:2;
-        -webkit-box-orient:vertical;
-        overflow:hidden;
+        display:block;
+        margin:0;
       }
 
-      /* clamp url to 3 lines */
       .suburl {
         font-size:11px;
         color:#888;
-        word-break:break-word;
-        display:-webkit-box;
-        -webkit-line-clamp:3;
-        -webkit-box-orient:vertical;
-        overflow:hidden;
+        display:block;
       }
 
-      /* group header title truncation */
       .group-head { grid-column: 1 / -1; padding:8px 12px; background:rgba(0,0,0,0.03); border-radius:12px; font-weight:700; color:#222; display:flex; justify-content:space-between; align-items:center; gap:12px; }
-      .group-title { flex:1 1 auto; display:inline-block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .group-title { flex:1 1 auto; display:inline-block; white-space: normal; overflow:visible; text-overflow:unset; }
 
       .meta { font-size:13px; color:#777; }
       .actions { display:flex; gap:8px; flex-wrap:wrap; }
@@ -65,7 +57,6 @@
       .empty { text-align:center; color:#888; margin-top:40px; }
       .badge { background:#ef4444; color:#fff; padding:4px 8px; border-radius:999px; font-size:12px; font-weight:700; margin-left:8px; }
 
-      /* ====== Styles pour le bouton "Copier tout" dans l'en-tête de groupe ====== */
       .group-head .group-right { display:flex; align-items:center; gap:8px; flex-shrink:0; }
       .copy-all-btn {
         padding: 6px 10px;
@@ -82,7 +73,20 @@
       }
       .copy-all-btn.copied { background: #10b981; transition: background 180ms; }
       .copy-all-btn .icon { font-size: 12px; opacity: 0.95; }
-      /* =================================================== */
+
+      /* prefix inline clickable span (now part of the name string) */
+      .prefix-span {
+        cursor: pointer;
+        user-select: all;
+        -webkit-user-select: all;
+        border-radius: 4px;
+        padding: 0 2px;
+      }
+      .prefix-span:hover { background: rgba(0,0,0,0.03); }
+      .prefix-span.copied { background: #10b981; color: white; transition: background 120ms; }
+
+      /* make long container content wrap nicely */
+      .info { word-break: break-word; }
     </style>
   </head>
   <body>
@@ -90,539 +94,576 @@
     <div class="search-bar">
       <input id="searchInput" type="text" placeholder="Rechercher par nom, épisode, season, URL..." />
     </div>
-
     <div id="fileList" class="container"></div>
     <div id="emptyMessage" class="empty" style="display:none;">Aucun fichier trouvé.</div>
 
-    <script>
-      // CONFIG
-      const FILES_PATH = '/files';
-      const WS_PATH = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
-      const SSE_PATH = '/events';
-      const POLL_INTERVAL_MS = 12000;
-      const BATCH_FLUSH_MS = 700;
-      const CHUNK_SIZE = 50;
-      const MAX_RENDER = 1200;
-      const METADATA_CAP = 30000;
+<script>
+  // CONFIG
+  const FILES_PATH = '/files';
+  const WS_PATH = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
+  const SSE_PATH = '/events';
+  const POLL_INTERVAL_MS = 12000;
+  const BATCH_FLUSH_MS = 700;
+  const CHUNK_SIZE = 50;
+  const MAX_RENDER = 1200;
+  const METADATA_CAP = 30000;
 
-      // STATE
-      window.allFiles = [];
-      window.viewFiles = [];
-      let ws = null, es = null, pollTimer = null, reconnectAttempts = 0;
-      let pendingMsgs = [];
-      let renderedCount = 0;
-      let sentinelObserver = null;
+  // STATE
+  window.allFiles = [];
+  window.viewFiles = [];
+  let ws = null, es = null, pollTimer = null, reconnectAttempts = 0;
+  let pendingMsgs = [];
+  let renderedCount = 0;
+  let sentinelObserver = null;
 
-      const toNum = v => (v === undefined || v === null) ? 0 : Number(v) || 0;
-      const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+  const toNum = v => (v === undefined || v === null) ? 0 : Number(v) || 0;
+  const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
-      function normalizeString(s) {
-        if (!s) return '';
-        try { s = s.normalize('NFKD').replace(/[\u0300-\u036f]/g, ''); } catch(e){}
-        try { s = s.replace(/[^\p{L}\p{N}]+/gu, ' '); } catch(e) { s = s.replace(/[^A-Za-z0-9]+/g, ' '); }
-        return s.replace(/\s+/g,' ').trim().toLowerCase();
+  function normalizeString(s) {
+    if (!s) return '';
+    try { s = s.normalize('NFKD').replace(/[\u0300-\u036f]/g, ''); } catch(e){}
+    try { s = s.replace(/[^\p{L}\p{N}]+/gu, ' '); } catch(e) { s = s.replace(/[^A-Za-z0-9]+/g, ' '); }
+    return s.replace(/\s+/g,' ').trim().toLowerCase();
+  }
+
+  function stripPrefixes(noExt) {
+    if (!noExt) return '';
+    let s = noExt;
+    s = s.replace(/^[0-9]{6,}[_\-]*/, '');
+    s = s.replace(/^[\(\{][^\)\}]*[\]\)\}][_-\s]*/g, '');
+    s = s.replace(/^@[^_\-\s]+[_\-\s]*/g, '').replace(/^[_\-]+@[^_\-\s]+[_\-\s]*/g, '');
+    s = s.replace(/[_\-]*@[^_\s\-_]+[_\-]*/g, ' ');
+    s = s.replace(/[_\-\.]/g, ' ');
+    s = s.replace(/\s+/g, ' ').trim();
+    return s;
+  }
+
+  function firstTokenIndex(noExt) {
+    const patterns = [
+      /(?:[_\s-]|^)(?:ep(?:isode)?|episode)[\W_]*0*\d+/i,
+      /(?:[_\s-]|^)[eE]0*\d+/i,
+      /[sS]0*\d+[^\d]*[eE]0*\d+/i,
+      /[eE]0*\d+[^\d]*[sS]0*\d+/i,
+      /(?:[_\s-]|^)(?:saison|season)[\W_]*0*\d+/i,
+      /(?:[_\s-]|^)[sS]0*\d+/i
+    ];
+    let minPos = -1;
+    for (const re of patterns) {
+      const pos = noExt.search(re);
+      if (pos >= 0) { if (minPos === -1 || pos < minPos) minPos = pos; }
+    }
+    return minPos;
+  }
+
+  function extractBaseName(name) {
+    if (!name) return '';
+    const noExt = name.replace(/\.[^.]+$/, '');
+    const stripped = stripPrefixes(noExt);
+    const pos = firstTokenIndex(stripped);
+    const baseRaw = pos >= 0 ? stripped.slice(0, pos) : stripped;
+    return normalizeString(baseRaw || stripped);
+  }
+
+  function parseParts(name) {
+    const noExt = (name || '').replace(/\.[^.]+$/, '');
+    const stripped = stripPrefixes(noExt);
+    const raw = stripped;
+
+    let season = null, ep = null, hasSeason = false, hasEp = false;
+
+    const seasonRegexes = [
+      /[sS]0*(\d{1,3})\b/g,
+      /\b(?:saison|season)[\W_]*0*(\d{1,3})/gi
+    ];
+    for (const re of seasonRegexes) {
+      const m = re.exec(raw);
+      if (m) { season = toNum(m[1]); hasSeason = true; break; }
+    }
+
+    const epRegexes = [
+      /[eE]0*(\d{1,3})\b/g,
+      /\b(?:ep(?:isode)?|episode)[\W_]*0*(\d{1,3})/i
+    ];
+    for (const re of epRegexes) {
+      const m = re.exec(raw);
+      if (m) { ep = toNum(m[1]); hasEp = true; break; }
+    }
+
+    if (hasEp && !hasSeason) season = 1;
+
+    const base = extractBaseName(name);
+    return { base, season, ep, hasSeason, hasEp, raw };
+  }
+
+  function intraGroupCompare(a, b) {
+    const pa = parseParts(a.name || '');
+    const pb = parseParts(b.name || '');
+
+    const aIsBaseOnly = (!pa.hasEp && pa.ep == null) && (!pa.hasSeason && pa.season == null);
+    const bIsBaseOnly = (!pb.hasEp && pb.ep == null) && (!pb.hasSeason && pb.season == null);
+    if (aIsBaseOnly && !bIsBaseOnly) return 1;
+    if (bIsBaseOnly && !aIsBaseOnly) return -1;
+
+    const sa = pa.season != null ? toNum(pa.season) : (pa.hasEp ? 1 : 0);
+    const sb = pb.season != null ? toNum(pb.season) : (pb.hasEp ? 1 : 0);
+    const ea = pa.ep != null ? toNum(pa.ep) : (pa.hasSeason ? 0 : 999999);
+    const eb = pb.ep != null ? toNum(pb.ep) : (pb.hasSeason ? 0 : 999999);
+
+    if (sa !== sb) return sa - sb;
+    if (ea !== eb) return ea - eb;
+
+    const lmA = toNum(a.lastModified), lmB = toNum(b.lastModified);
+    if (lmA !== lmB) return lmB - lmA;
+
+    const aNoExt = (a.name || '').replace(/\.[^.]+$/, '');
+    const bNoExt = (b.name || '').replace(/\.[^.]+$/, '');
+    return collator.compare(aNoExt, bNoExt);
+  }
+
+  function buildOrderedList(files) {
+    const groups = new Map();
+    (files || []).forEach(f => {
+      const base = extractBaseName(f.name || '') || (f.name || '').replace(/\.[^.]+$/, '');
+      if (!groups.has(base)) groups.set(base, []);
+      groups.get(base).push(f);
+    });
+
+    const groupArr = Array.from(groups.entries()).map(([base, items]) => {
+      const newest = items.reduce((m, it) => Math.max(m, toNum(it.lastModified)), 0);
+      return { base, items, newest };
+    });
+
+    groupArr.sort((g1, g2) => toNum(g2.newest) - toNum(g1.newest));
+
+    const out = [];
+    for (const g of groupArr) {
+      g.items.sort(intraGroupCompare);
+
+      const mapEp = new Map();
+      for (const it of g.items) {
+        const p = parseParts(it.name || '');
+        const s = (p.season != null) ? p.season : (p.hasEp ? 1 : 'base');
+        const e = (p.ep != null) ? p.ep : (p.hasSeason ? 0 : 'base');
+        const key = (s === 'base') ? 'base' : `s${s}e${e}`;
+        if (!mapEp.has(key)) mapEp.set(key, []);
+        mapEp.get(key).push(it);
+      }
+      for (const [k, arr] of mapEp.entries()) {
+        arr.sort((x,y) => toNum(y.lastModified) - toNum(x.lastModified));
+        if (arr.length) arr[0].__isNewestForEpisode = true;
+        for (let i=1;i<arr.length;i++) arr[i].__isNewestForEpisode = false;
       }
 
-      function stripPrefixes(noExt) {
-        if (!noExt) return '';
-        let s = noExt;
-        s = s.replace(/^[0-9]{6,}[_\-]*/, '');
-        s = s.replace(/^[\[\(\{][^\]\)\}]*[\]\)\}][_-\s]*/g, '');
-        s = s.replace(/^@[^_\-\s]+[_\-\s]*/g, '').replace(/^[_\-]+@[^_\-\s]+[_\-\s]*/g, '');
-        s = s.replace(/[_\-]*@[^_\s\-_]+[_\-]*/g, ' ');
-        s = s.replace(/[_\-\.\[\]\(\)]/g, ' ');
-        s = s.replace(/\s+/g, ' ').trim();
-        return s;
+      out.push({ __groupHeader: true, base: g.base, newest: g.newest });
+      for (const it of g.items) out.push(it);
+    }
+    return out;
+  }
+
+  function escapeHtml(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  /* copy helper */
+  function copyText(text) {
+    if (!text) return;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).catch(() => {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); } catch (e) {}
+        ta.remove();
+      });
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); } catch (e) {}
+      ta.remove();
+    }
+  }
+
+  /* insert zero-width spaces into long uninterrupted sequences so they can wrap nicely */
+  function insertSoftBreaks(str, maxLen = 40) {
+    if (!str) return '';
+    // For each sequence of non-whitespace longer than maxLen, insert \u200b every maxLen chars
+    return str.replace(/\S+/g, (chunk) => {
+      if (chunk.length <= maxLen) return chunk;
+      let out = '';
+      for (let i = 0; i < chunk.length; i += maxLen) {
+        out += chunk.slice(i, i + maxLen);
+        if (i + maxLen < chunk.length) out += '\u200b';
+      }
+      return out;
+    });
+  }
+
+  /** CopyGroup function (unchanged behavior) **/
+  function copyGroup(base) {
+    if (!base) return;
+    const files = (window.allFiles || []).filter(f => {
+      try { return extractBaseName(f.name || '') === base; } catch (e) { return false; }
+    }).filter(f => f.url);
+
+    if (!files.length) {
+      copyText(`Aucun fichier trouvé pour: ${base}`);
+      return;
+    }
+
+    const epMap = new Map();
+    const baseFiles = [];
+
+    for (const f of files) {
+      const p = parseParts(f.name || '');
+      let season = (p.season != null) ? p.season : (p.hasEp ? 1 : null);
+      let ep = (p.ep != null) ? p.ep : null;
+
+      if (season === null && ep === null) {
+        baseFiles.push({ f, p });
+        continue;
       }
 
-      function firstTokenIndex(noExt) {
-        const patterns = [
-          /(?:[_\s-]|^)(?:ep(?:isode)?|episode)[\W_]*0*\d+/i,
-          /(?:[_\s-]|^)[eE]0*\d+/i,
-          /[sS]0*\d+[^\d]*[eE]0*\d+/i,
-          /[eE]0*\d+[^\d]*[sS]0*\d+/i,
-          /(?:[_\s-]|^)(?:saison|season)[\W_]*0*\d+/i,
-          /(?:[_\s-]|^)[sS]0*\d+/i
-        ];
-        let minPos = -1;
-        for (const re of patterns) {
-          const pos = noExt.search(re);
-          if (pos >= 0) { if (minPos === -1 || pos < minPos) minPos = pos; }
+      season = season == null ? 0 : Number(season);
+      ep = ep == null ? 0 : Number(ep);
+
+      const key = `s${season}e${ep}`;
+      const existing = epMap.get(key);
+      if (!existing) epMap.set(key, { file: f, season, ep });
+      else {
+        if (toNum(f.lastModified) > toNum(existing.file.lastModified)) {
+          epMap.set(key, { file: f, season, ep });
         }
-        return minPos;
       }
+    }
 
-      function extractBaseName(name) {
-        if (!name) return '';
-        const noExt = name.replace(/\.[^.]+$/, '');
-        const stripped = stripPrefixes(noExt);
-        const pos = firstTokenIndex(stripped);
-        const baseRaw = pos >= 0 ? stripped.slice(0, pos) : stripped;
-        return normalizeString(baseRaw || stripped);
+    const sortedKeys = Array.from(epMap.keys()).sort((a,b) => {
+      const ma = a.match(/^s(\d+)e(\d+)$/);
+      const mb = b.match(/^s(\d+)e(\d+)$/);
+      const sa = ma ? Number(ma[1]) : 0;
+      const ea = ma ? Number(ma[2]) : 0;
+      const sb = mb ? Number(mb[1]) : 0;
+      const eb = mb ? Number(mb[2]) : 0;
+      if (sa !== sb) return sa - sb;
+      return ea - eb;
+    });
+
+    let out = '';
+    for (const k of sortedKeys) {
+      const item = epMap.get(k);
+      if (!item) continue;
+      const season = item.season;
+      const ep = item.ep;
+      const labelName = `ep${ep}_s${season}`;
+      out += `${labelName}\n${item.file.name || '(sans nom)'}\nUrl\n${item.file.url || ''}\n\n`;
+    }
+
+    if (baseFiles.length) {
+      baseFiles.sort((a,b) => toNum(b.f.lastModified) - toNum(a.f.lastModified));
+      for (const bf of baseFiles) {
+        const labelName = `Name_base`;
+        out += `${labelName}\n${bf.f.name || '(sans nom)'}\nUrl\n${bf.f.url || ''}\n\n`;
       }
+    }
 
-      function parseParts(name) {
-        const noExt = (name || '').replace(/\.[^.]+$/, '');
-        const stripped = stripPrefixes(noExt);
-        const raw = stripped;
+    copyText(out.trim());
+  }
 
-        let season = null, ep = null, hasSeason = false, hasEp = false;
+  function createGroupHeader(f) {
+    const head = document.createElement('div');
+    head.className = 'group-head';
 
-        const seasonRegexes = [
-          /[sS]0*(\d{1,3})\b/g,
-          /\b(?:saison|season)[\W_]*0*(\d{1,3})/gi
-        ];
-        for (const re of seasonRegexes) {
-          const m = re.exec(raw);
-          if (m) { season = toNum(m[1]); hasSeason = true; break; }
-        }
+    const left = document.createElement('div');
+    left.className = 'group-title';
+    const displayBase = (f.base ? f.base.replace(/\s+/g,' ') : '(sans nom)');
+    left.textContent = insertSoftBreaks(displayBase, 40);
+    head.appendChild(left);
 
-        const epRegexes = [
-          /[eE]0*(\d{1,3})\b/g,
-          /\b(?:ep(?:isode)?|episode)[\W_]*0*(\d{1,3})/i
-        ];
-        for (const re of epRegexes) {
-          const m = re.exec(raw);
-          if (m) { ep = toNum(m[1]); hasEp = true; break; }
-        }
+    const rightWrap = document.createElement('div');
+    rightWrap.className = 'group-right';
 
-        if (hasEp && !hasSeason) season = 1;
+    const right = document.createElement('div');
+    right.style.fontSize = '13px';
+    right.style.color = '#555';
+    right.style.whiteSpace = 'nowrap';
+    right.style.marginLeft = '8px';
+    right.textContent = f.newest ? ('Dernier upload : ' + new Date(Number(f.newest)).toLocaleString()) : '';
+    rightWrap.appendChild(right);
 
-        const base = extractBaseName(name);
-        return { base, season, ep, hasSeason, hasEp, raw };
-      }
+    const copyAllBtn = document.createElement('button');
+    copyAllBtn.className = 'copy-all-btn';
+    copyAllBtn.type = 'button';
+    copyAllBtn.title = 'Copier tous les Name_epX_sY + Url de ce groupe (format prédéfini)';
+    copyAllBtn.innerHTML = '<span class="icon"></span><span>Copier tout</span>';
 
-      function intraGroupCompare(a, b) {
-        const pa = parseParts(a.name || '');
-        const pb = parseParts(b.name || '');
+    copyAllBtn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      try { copyGroup(f.base); } catch (e) { console.warn('copyGroup error', e); }
 
-        const aIsBaseOnly = (!pa.hasEp && pa.ep == null) && (!pa.hasSeason && pa.season == null);
-        const bIsBaseOnly = (!pb.hasEp && pb.ep == null) && (!pb.hasSeason && pb.season == null);
-        if (aIsBaseOnly && !bIsBaseOnly) return 1;
-        if (bIsBaseOnly && !aIsBaseOnly) return -1;
+      copyAllBtn.classList.add('copied');
+      const old = copyAllBtn.innerHTML;
+      copyAllBtn.innerHTML = '<span class="icon"></span><span>Copié</span>';
+      setTimeout(() => {
+        copyAllBtn.classList.remove('copied');
+        copyAllBtn.innerHTML = old;
+      }, 1200);
+    });
 
-        const sa = pa.season != null ? toNum(pa.season) : (pa.hasEp ? 1 : 0);
-        const sb = pb.season != null ? toNum(pb.season) : (pb.hasEp ? 1 : 0);
-        const ea = pa.ep != null ? toNum(pa.ep) : (pa.hasSeason ? 0 : 999999);
-        const eb = pb.ep != null ? toNum(pb.ep) : (pb.hasSeason ? 0 : 999999);
+    rightWrap.appendChild(copyAllBtn);
+    head.appendChild(rightWrap);
 
-        if (sa !== sb) return sa - sb;
-        if (ea !== eb) return ea - eb;
+    return head;
+  }
 
-        const lmA = toNum(a.lastModified), lmB = toNum(b.lastModified);
-        if (lmA !== lmB) return lmB - lmA;
+  function createCardElement(f, createVideo = true) {
+    if (f.__groupHeader) return createGroupHeader(f);
 
-        const aNoExt = (a.name || '').replace(/\.[^.]+$/, '');
-        const bNoExt = (b.name || '').replace(/\.[^.]+$/, '');
-        return collator.compare(aNoExt, bNoExt);
-      }
+    const card = document.createElement('div'); card.className='card';
+    const isVideo = (f.name||'').match(/\.(mp4|mov|webm|mkv)$/i);
+    const isImage = (f.name||'').match(/\.(jpg|jpeg|png|gif|webp)$/i);
 
-      function buildOrderedList(files) {
-        const groups = new Map();
-        (files || []).forEach(f => {
-          const base = extractBaseName(f.name || '') || (f.name || '').replace(/\.[^.]+$/, '');
-          if (!groups.has(base)) groups.set(base, []);
-          groups.get(base).push(f);
-        });
+    let preview;
+    if (isVideo && createVideo) {
+      const vid = document.createElement('video'); vid.className='thumb'; vid.src = f.url; vid.controls = true; vid.preload='metadata'; preview = vid;
+    } else if (isImage) {
+      const img = document.createElement('img'); img.className='thumb'; img.alt = f.name||''; img.src = f.url; preview = img;
+    } else if (isVideo && !createVideo) {
+      const div = document.createElement('div'); div.className='thumb'; div.style.display='flex'; div.style.alignItems='center'; div.style.justifyContent='center'; div.style.cursor='pointer'; div.textContent='Cliquer pour lire';
+      div.addEventListener('click', ()=>{ const vid=document.createElement('video'); vid.className='thumb'; vid.src=f.url; vid.controls=true; vid.preload='metadata'; div.replaceWith(vid); }, { once:true });
+      preview = div;
+    } else {
+      const div = document.createElement('div'); div.className='thumb'; div.style.display='flex'; div.style.alignItems='center'; div.style.justifyContent='center'; div.style.color='#999'; div.textContent='Pas d’aperçu'; preview = div;
+    }
 
-        const groupArr = Array.from(groups.entries()).map(([base, items]) => {
-          const newest = items.reduce((m, it) => Math.max(m, toNum(it.lastModified)), 0);
-          return { base, items, newest };
-        });
+    const info = document.createElement('div'); info.className='info';
 
-        groupArr.sort((g1, g2) => toNum(g2.newest) - toNum(g1.newest));
+    // name (no separate button) but prefix digits clickable inline
+    const nameDiv = document.createElement('div'); nameDiv.className='name';
 
-        const out = [];
-        for (const g of groupArr) {
-          g.items.sort(intraGroupCompare);
+    const rawName = f.name || '(sans nom)';
+    // detect leading digits
+    const leadingMatch = rawName.match(/^(\d+)/);
+    if (leadingMatch) {
+      const digits = leadingMatch[1];
+      const rest = rawName.slice(digits.length);
 
-          const mapEp = new Map();
-          for (const it of g.items) {
-            const p = parseParts(it.name || '');
-            const s = (p.season != null) ? p.season : (p.hasEp ? 1 : 'base');
-            const e = (p.ep != null) ? p.ep : (p.hasSeason ? 0 : 'base');
-            const key = (s === 'base') ? 'base' : `s${s}e${e}`;
-            if (!mapEp.has(key)) mapEp.set(key, []);
-            mapEp.get(key).push(it);
-          }
-          for (const [k, arr] of mapEp.entries()) {
-            arr.sort((x,y) => toNum(y.lastModified) - toNum(x.lastModified));
-            if (arr.length) arr[0].__isNewestForEpisode = true;
-            for (let i=1;i<arr.length;i++) arr[i].__isNewestForEpisode = false;
-          }
+      // create prefix span (clickable)
+      const prefixSpan = document.createElement('span');
+      prefixSpan.className = 'prefix-span';
+      prefixSpan.textContent = insertSoftBreaks(digits, 40); // keep soft breaks if digits long
+      prefixSpan.title = 'Cliquer pour copier le nombre';
+      prefixSpan.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        copyText(digits);
+        prefixSpan.classList.add('copied');
+        const old = prefixSpan.textContent;
+        prefixSpan.textContent = 'Copié';
+        setTimeout(()=>{
+          prefixSpan.classList.remove('copied');
+          prefixSpan.textContent = insertSoftBreaks(digits, 40);
+        }, 1200);
+      });
 
-          out.push({ __groupHeader: true, base: g.base, newest: g.newest });
-          for (const it of g.items) out.push(it);
-        }
-        return out;
-      }
+      // rest span (keeps soft breaks)
+      const restSpan = document.createElement('span');
+      restSpan.innerHTML = insertSoftBreaks(rest, 40).replace(/\u200b/g, '\u200b'); // keep zwsp
 
-      function escapeHtml(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+      // append in order so it looks like a single string
+      nameDiv.appendChild(prefixSpan);
+      // append a zero-width joiner if needed to avoid accidental space
+      // but keep original characters exactly (no added spaces)
+      restSpan.style.whiteSpace = 'pre-wrap';
+      nameDiv.appendChild(restSpan);
+    } else {
+      // no leading digits — just show full name with soft breaks
+      nameDiv.textContent = insertSoftBreaks(rawName, 40);
+    }
 
-      /* ====== Fonctions ajoutées pour "Copier tout" ====== */
-      function copyText(text) {
-        if (!text) return;
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(text).catch(() => {
-            const ta = document.createElement('textarea');
-            ta.value = text;
-            ta.style.position = 'fixed';
-            ta.style.left = '-9999px';
-            document.body.appendChild(ta);
-            ta.select();
-            try { document.execCommand('copy'); } catch (e) {}
-            ta.remove();
-          });
-        } else {
-          const ta = document.createElement('textarea');
-          ta.value = text;
-          ta.style.position = 'fixed';
-          ta.style.left = '-9999px';
-          document.body.appendChild(ta);
-          ta.select();
-          try { document.execCommand('copy'); } catch (e) {}
-          ta.remove();
-        }
-      }
+    // append badge if newest for episode
+    if (f.__isNewestForEpisode) {
+      const badge = document.createElement('span'); badge.className='badge'; badge.textContent='NOUVO';
+      nameDiv.appendChild(badge);
+    }
 
-      /**
-       * Nouveau copyGroup :
-       * - récupère le fichier le plus récent par saison/épisode
-       * - trie par saison asc, épisode asc
-       * - génère le texte au format demandé :
-       *   Name_ep{EP}_s{SEASON}
-       *   <nom complet>
-       *   Url
-       *   <url>
-       *
-       * - les fichiers "base" (sans saison/épisode) sont ajoutés à la fin sous "Name_base"
-       */
-      function copyGroup(base) {
-        if (!base) return;
-        // trouver tous les fichiers du groupe
-        const files = (window.allFiles || []).filter(f => {
-          try { return extractBaseName(f.name || '') === base; } catch (e) { return false; }
-        }).filter(f => f.url);
+    const metaDiv = document.createElement('div'); metaDiv.className='meta';
+    const sizeMB = ((toNum(f.size)||0)/1048576).toFixed(1);
+    const lm = f.lastModified ? new Date(Number(f.lastModified)).toLocaleString() : '-';
+    metaDiv.textContent = `${sizeMB} MB • ${lm}`;
 
-        if (!files.length) {
-          copyText(`Aucun fichier trouvé pour: ${base}`);
-          return;
-        }
+    const actions = document.createElement('div'); actions.className='actions';
+    const copyBtn = document.createElement('button'); copyBtn.className='small-btn'; copyBtn.textContent='Copier URL'; copyBtn.addEventListener('click', ()=>copyUrl(f.url));
+    const openA = document.createElement('a'); openA.href = f.url; openA.target='_blank';
+    const openBtn = document.createElement('button'); openBtn.className='small-btn'; openBtn.textContent='Ouvrir'; openA.appendChild(openBtn);
 
-        // Map des épisodes -> garder le plus récent
-        const epMap = new Map(); // key -> {file, season, ep}
-        const baseFiles = []; // fichiers sans saison/ép
+    const urlSpan = document.createElement('div'); urlSpan.className='suburl';
+    urlSpan.textContent = insertSoftBreaks(f.url || '', 50);
 
-        for (const f of files) {
-          const p = parseParts(f.name || '');
-          let season = (p.season != null) ? p.season : (p.hasEp ? 1 : null);
-          let ep = (p.ep != null) ? p.ep : null;
+    actions.appendChild(copyBtn); actions.appendChild(openA);
+    info.appendChild(nameDiv); info.appendChild(metaDiv); info.appendChild(actions); info.appendChild(urlSpan);
 
-          if (season === null && ep === null) {
-            baseFiles.push({ f, p });
-            continue;
-          }
+    card.appendChild(preview); card.appendChild(info);
+    return card;
+  }
 
-          // normalize numbers
-          season = season == null ? 0 : Number(season);
-          ep = ep == null ? 0 : Number(ep);
+  function renderNextChunk() {
+    const listEl = document.getElementById('fileList');
+    const source = (window.viewFiles && window.viewFiles.length) ? window.viewFiles : buildOrderedList(window.allFiles || []);
+    if (renderedCount >= source.length) return;
+    const frag = document.createDocumentFragment();
+    const limit = Math.min(source.length, Math.min(MAX_RENDER, renderedCount + CHUNK_SIZE));
+    let videoCount = 0; const MAX_VIDEOS = 8;
+    for (let i = renderedCount; i < limit; i++) {
+      const f = source[i];
+      if (f.__groupHeader) { frag.appendChild(createCardElement(f, false)); continue; }
+      const isVideo = (f.name||'').match(/\.(mp4|mov|webm|mkv)$/i);
+      const createVideo = isVideo ? (videoCount < MAX_VIDEOS) : false;
+      const card = createCardElement(f, createVideo);
+      if (isVideo && createVideo) videoCount++;
+      frag.appendChild(card);
+    }
+    renderedCount = limit;
+    listEl.appendChild(frag);
+    updateEmpty();
+    updateSentinel();
+  }
 
-          const key = `s${season}e${ep}`;
-          const existing = epMap.get(key);
-          if (!existing) epMap.set(key, { file: f, season, ep });
-          else {
-            // garder le plus récent selon lastModified
-            if (toNum(f.lastModified) > toNum(existing.file.lastModified)) {
-              epMap.set(key, { file: f, season, ep });
-            }
-          }
-        }
+  function updateSentinel() {
+    const listEl = document.getElementById('fileList');
+    let sentinel = document.getElementById('render-sentinel');
+    if (!sentinel) {
+      sentinel = document.createElement('div'); sentinel.id='render-sentinel'; sentinel.style.width='1px'; sentinel.style.height='1px'; sentinel.style.opacity='0';
+      listEl.appendChild(sentinel); ensureSentinelObserver(); sentinelObserver.observe(sentinel);
+    } else listEl.appendChild(sentinel);
+  }
 
-        // trier les clés par saison asc, episode asc
-        const sortedKeys = Array.from(epMap.keys()).sort((a,b) => {
-          const ma = a.match(/^s(\d+)e(\d+)$/);
-          const mb = b.match(/^s(\d+)e(\d+)$/);
-          const sa = ma ? Number(ma[1]) : 0;
-          const ea = ma ? Number(ma[2]) : 0;
-          const sb = mb ? Number(mb[1]) : 0;
-          const eb = mb ? Number(mb[2]) : 0;
-          if (sa !== sb) return sa - sb;
-          return ea - eb;
-        });
+  function ensureSentinelObserver() {
+    if (sentinelObserver) return;
+    sentinelObserver = new IntersectionObserver(entries => { entries.forEach(e => { if (e.isIntersecting) renderNextChunk(); }); }, { root:null, rootMargin:'600px', threshold:0.01 });
+  }
 
-        // construire la sortie
-        let out = '';
-        for (const k of sortedKeys) {
-          const item = epMap.get(k);
-          if (!item) continue;
-          const season = item.season;
-          const ep = item.ep;
-          // format demandé (on suit l'exemple "Name_ep{ep}_s{season}")
-          const labelName = `ep${ep}_s${season}`;
-          out += `${labelName}\n${item.file.name || '(sans nom)'}\nUrl\n${item.file.url || ''}\n\n`;
-        }
+  function updateEmpty() {
+    const empty = document.getElementById('emptyMessage');
+    const len = (window.viewFiles && window.viewFiles.length) ? window.viewFiles.filter(x=>!x.__groupHeader).length : buildOrderedList(window.allFiles || []).filter(x=>!x.__groupHeader).length;
+    empty.style.display = (len === 0) ? 'block' : 'none';
+  }
 
-        // ajouter les base files (ceux sans saison/ep) à la fin
-        // garder seulement le plus récent par nom/url (util)
-        if (baseFiles.length) {
-          // on trie par lastModified décroissant puis prend tous (ou tu peux filtrer)
-          baseFiles.sort((a,b) => toNum(b.f.lastModified) - toNum(a.f.lastModified));
-          for (const bf of baseFiles) {
-            const labelName = `Name_base`;
-            out += `${labelName}\n${bf.f.name || '(sans nom)'}\nUrl\n${bf.f.url || ''}\n\n`;
-          }
-        }
+  function fullRerender() { renderedCount=0; document.getElementById('fileList').innerHTML=''; renderNextChunk(); }
 
-        copyText(out.trim());
-      }
+  function applySearchAndRender() {
+    const q = (document.getElementById('searchInput').value || '').trim().toLowerCase();
+    const ordered = buildOrderedList(window.allFiles || []);
+    if (q) {
+      window.viewFiles = ordered.filter(f => {
+        if (f.__groupHeader) return (f.base||'').toLowerCase().includes(q);
+        return ((f.name||'').toLowerCase().includes(q) || (f.url||'').toLowerCase().includes(q) || (extractBaseName(f.name||'').toLowerCase().includes(q)));
+      });
+    } else window.viewFiles = [];
+    renderedCount=0; document.getElementById('fileList').innerHTML=''; renderNextChunk();
+  }
+  function debounce(fn, ms=150) { let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
+  document.getElementById('searchInput').addEventListener('input', debounce(applySearchAndRender, 140));
 
-      function createGroupHeader(f) {
-        const head = document.createElement('div');
-        head.className = 'group-head';
+  async function loadFiles() {
+    try {
+      const res = await fetch(FILES_PATH, { cache:'no-store' });
+      if (!res.ok) throw new Error('fetch failed');
+      const files = await res.json();
+      const normalized = (files||[]).map(f=>({ name:f.name, url:f.url, size:toNum(f.size), lastModified:toNum(f.lastModified), thumbnail:f.thumbnail||null }));
+      const seen = new Set(), unique = [];
+      for (const it of normalized) { if (!it.url) continue; if (!seen.has(it.url)){ seen.add(it.url); unique.push(it); } }
+      window.allFiles = unique.slice(0, METADATA_CAP);
+      fullRerender();
+    } catch(e){ console.warn('loadFiles error', e); }
+  }
 
-        const left = document.createElement('div');
-        left.className = 'group-title';
-        left.textContent = f.base ? f.base.replace(/\s+/g,' ') : '(sans nom)';
-        head.appendChild(left);
+  function handleServerMsg(msg) {
+    if (!msg || !msg.type) return;
+    if (msg.type === 'full' && Array.isArray(msg.files)) {
+      const arr = msg.files.map(f=>({ name:f.name, url:f.url, size:toNum(f.size), lastModified:toNum(f.lastModified), thumbnail:f.thumbnail||null }));
+      const seen = new Set(), unique = [];
+      for (const it of arr) { if (!it.url) continue; if (!seen.has(it.url)){ seen.add(it.url); unique.push(it); } }
+      window.allFiles = unique.slice(0, METADATA_CAP);
+      fullRerender();
+    } else if ((msg.type === 'add' || msg.type === 'update') && msg.file) {
+      const file = { name: msg.file.name, url: msg.file.url, size: toNum(msg.file.size), lastModified: toNum(msg.file.lastModified), thumbnail: msg.file.thumbnail||null };
+      const idx = (window.allFiles||[]).findIndex(x => x.url === file.url);
+      if (idx >= 0) window.allFiles[idx] = file; else window.allFiles.unshift(file);
+      if (window.allFiles.length > METADATA_CAP) window.allFiles.length = METADATA_CAP;
+      fullRerender();
+    } else if (msg.type === 'remove') {
+      const ident = msg.url || msg.name;
+      window.allFiles = (window.allFiles||[]).filter(x => x.url !== ident);
+      fullRerender();
+    } else if (msg.type === 'notify' && Array.isArray(msg.files)) {
+      const arr = msg.files.map(f=>({ name:f.name, url:f.url, size:toNum(f.size), lastModified:toNum(f.lastModified), thumbnail:f.thumbnail||null }));
+      const seen = new Set(), unique = [];
+      for (const it of arr) { if (!it.url) continue; if (!seen.has(it.url)){ seen.add(it.url); unique.push(it); } }
+      window.allFiles = unique.slice(0, METADATA_CAP);
+      fullRerender();
+    }
+  }
 
-        const rightWrap = document.createElement('div');
-        rightWrap.className = 'group-right';
+  function bufferAndFlush(msg) { pendingMsgs.push(msg); }
+  setInterval(()=> {
+    if (!pendingMsgs.length) return;
+    const batch = pendingMsgs.splice(0, pendingMsgs.length);
+    for (const m of batch) try { handleServerMsg(m); } catch(e){ console.warn('handleServerMsg error', e); }
+  }, BATCH_FLUSH_MS);
 
-        const right = document.createElement('div');
-        right.style.fontSize = '13px';
-        right.style.color = '#555';
-        right.style.whiteSpace = 'nowrap';
-        right.style.marginLeft = '8px';
-        right.textContent = f.newest ? ('Dernier upload : ' + new Date(Number(f.newest)).toLocaleString()) : '';
-        rightWrap.appendChild(right);
+  function connectWebSocket() {
+    try { ws = new WebSocket(WS_PATH); } catch(e){ ws=null; startSSE(); startPolling(); return; }
+    ws.addEventListener('open', ()=>{ reconnectAttempts=0; try{ ws.send(JSON.stringify({ type:'subscribe', channel:'files' })); } catch(e){} });
+    ws.addEventListener('message', ev=>{ try{ const msg = JSON.parse(ev.data); bufferAndFlush(msg); } catch(e){ console.warn('ws parse', e); } });
+    ws.addEventListener('close', ()=>{ ws=null; startSSE(); scheduleReconnect(); });
+    ws.addEventListener('error', ()=>{ try{ ws.close(); } catch(e){} });
+  }
+  function scheduleReconnect(){ reconnectAttempts++; const delay = Math.min(30000, 1000 * Math.pow(1.6, Math.min(10, reconnectAttempts))); setTimeout(()=>{ if (!ws) connectWebSocket(); }, delay); }
 
-        const copyAllBtn = document.createElement('button');
-        copyAllBtn.className = 'copy-all-btn';
-        copyAllBtn.type = 'button';
-        copyAllBtn.title = 'Copier tous les Name_epX_sY + Url de ce groupe (format prédéfini)';
-        copyAllBtn.innerHTML = '<span class="icon"></span><span>Copier tout</span>';
+  function startSSE() {
+    if (typeof EventSource === 'undefined') { startPolling(); return; }
+    if (es) return;
+    try { es = new EventSource(SSE_PATH); } catch(e){ es=null; startPolling(); return; }
+    es.onmessage = ev => { try{ const msg = JSON.parse(ev.data); bufferAndFlush(msg); } catch(e){ console.warn('sse parse', e); } };
+    es.onerror = ()=>{ try{ es.close(); } catch(e){} es=null; startPolling(); };
+  }
 
-        copyAllBtn.addEventListener('click', (ev) => {
-          ev.stopPropagation();
-          try { copyGroup(f.base); } catch (e) { console.warn('copyGroup error', e); }
-
-          copyAllBtn.classList.add('copied');
-          const old = copyAllBtn.innerHTML;
-          copyAllBtn.innerHTML = '<span class="icon"></span><span>Copié</span>';
-          setTimeout(() => {
-            copyAllBtn.classList.remove('copied');
-            copyAllBtn.innerHTML = old;
-          }, 1200);
-        });
-
-        rightWrap.appendChild(copyAllBtn);
-        head.appendChild(rightWrap);
-
-        return head;
-      }
-      /* ====== Fin des fonctions "Copier tout" ====== */
-
-      function createCardElement(f, createVideo = true) {
-        if (f.__groupHeader) return createGroupHeader(f);
-
-        const card = document.createElement('div'); card.className='card';
-        const isVideo = (f.name||'').match(/\.(mp4|mov|webm|mkv)$/i);
-        const isImage = (f.name||'').match(/\.(jpg|jpeg|png|gif|webp)$/i);
-
-        let preview;
-        if (isVideo && createVideo) {
-          const vid = document.createElement('video'); vid.className='thumb'; vid.src = f.url; vid.controls = true; vid.preload='metadata'; preview = vid;
-        } else if (isImage) {
-          const img = document.createElement('img'); img.className='thumb'; img.alt = f.name||''; img.src = f.url; preview = img;
-        } else if (isVideo && !createVideo) {
-          const div = document.createElement('div'); div.className='thumb'; div.style.display='flex'; div.style.alignItems='center'; div.style.justifyContent='center'; div.style.cursor='pointer'; div.textContent='Cliquer pour lire';
-          div.addEventListener('click', ()=>{ const vid=document.createElement('video'); vid.className='thumb'; vid.src=f.url; vid.controls=true; vid.preload='metadata'; div.replaceWith(vid); }, { once:true });
-          preview = div;
-        } else {
-          const div = document.createElement('div'); div.className='thumb'; div.style.display='flex'; div.style.alignItems='center'; div.style.justifyContent='center'; div.style.color='#999'; div.textContent='Pas d’aperçu'; preview = div;
-        }
-
-        const info = document.createElement('div'); info.className='info';
-        const nameDiv = document.createElement('div'); nameDiv.className='name'; nameDiv.innerHTML = escapeHtml(f.name || '');
-
-        if (f.__isNewestForEpisode) {
-          const badge = document.createElement('span'); badge.className='badge'; badge.textContent='NOUVO';
-          nameDiv.appendChild(badge);
-        }
-
-        const metaDiv = document.createElement('div'); metaDiv.className='meta';
-        const sizeMB = ((toNum(f.size)||0)/1048576).toFixed(1);
-        const lm = f.lastModified ? new Date(Number(f.lastModified)).toLocaleString() : '-';
-        metaDiv.textContent = `${sizeMB} MB • ${lm}`;
-
-        const actions = document.createElement('div'); actions.className='actions';
-        const copyBtn = document.createElement('button'); copyBtn.className='small-btn'; copyBtn.textContent='Copier URL'; copyBtn.addEventListener('click', ()=>copyUrl(f.url));
-        const openA = document.createElement('a'); openA.href = f.url; openA.target='_blank';
-        const openBtn = document.createElement('button'); openBtn.className='small-btn'; openBtn.textContent='Ouvrir'; openA.appendChild(openBtn);
-
-        const urlSpan = document.createElement('div'); urlSpan.className='suburl'; urlSpan.textContent = f.url || '';
-
-        actions.appendChild(copyBtn); actions.appendChild(openA);
-        info.appendChild(nameDiv); info.appendChild(metaDiv); info.appendChild(actions); info.appendChild(urlSpan);
-
-        card.appendChild(preview); card.appendChild(info);
-        return card;
-      }
-
-      function renderNextChunk() {
-        const listEl = document.getElementById('fileList');
-        const source = (window.viewFiles && window.viewFiles.length) ? window.viewFiles : buildOrderedList(window.allFiles || []);
-        if (renderedCount >= source.length) return;
-        const frag = document.createDocumentFragment();
-        const limit = Math.min(source.length, Math.min(MAX_RENDER, renderedCount + CHUNK_SIZE));
-        let videoCount = 0; const MAX_VIDEOS = 8;
-        for (let i = renderedCount; i < limit; i++) {
-          const f = source[i];
-          if (f.__groupHeader) { frag.appendChild(createCardElement(f, false)); continue; }
-          const isVideo = (f.name||'').match(/\.(mp4|mov|webm|mkv)$/i);
-          const createVideo = isVideo ? (videoCount < MAX_VIDEOS) : false;
-          const card = createCardElement(f, createVideo);
-          if (isVideo && createVideo) videoCount++;
-          frag.appendChild(card);
-        }
-        renderedCount = limit;
-        listEl.appendChild(frag);
-        updateEmpty();
-        updateSentinel();
-      }
-
-      function updateSentinel() {
-        const listEl = document.getElementById('fileList');
-        let sentinel = document.getElementById('render-sentinel');
-        if (!sentinel) {
-          sentinel = document.createElement('div'); sentinel.id='render-sentinel'; sentinel.style.width='1px'; sentinel.style.height='1px'; sentinel.style.opacity='0';
-          listEl.appendChild(sentinel); ensureSentinelObserver(); sentinelObserver.observe(sentinel);
-        } else listEl.appendChild(sentinel);
-      }
-
-      function ensureSentinelObserver() {
-        if (sentinelObserver) return;
-        sentinelObserver = new IntersectionObserver(entries => { entries.forEach(e => { if (e.isIntersecting) renderNextChunk(); }); }, { root:null, rootMargin:'600px', threshold:0.01 });
-      }
-
-      function updateEmpty() {
-        const empty = document.getElementById('emptyMessage');
-        const len = (window.viewFiles && window.viewFiles.length) ? window.viewFiles.filter(x=>!x.__groupHeader).length : buildOrderedList(window.allFiles || []).filter(x=>!x.__groupHeader).length;
-        empty.style.display = (len === 0) ? 'block' : 'none';
-      }
-
-      function fullRerender() { renderedCount=0; document.getElementById('fileList').innerHTML=''; renderNextChunk(); }
-
-      function applySearchAndRender() {
-        const q = (document.getElementById('searchInput').value || '').trim().toLowerCase();
-        const ordered = buildOrderedList(window.allFiles || []);
-        if (q) {
-          window.viewFiles = ordered.filter(f => {
-            if (f.__groupHeader) return (f.base||'').toLowerCase().includes(q);
-            return ((f.name||'').toLowerCase().includes(q) || (f.url||'').toLowerCase().includes(q) || (extractBaseName(f.name||'').toLowerCase().includes(q)));
-          });
-        } else window.viewFiles = [];
-        renderedCount=0; document.getElementById('fileList').innerHTML=''; renderNextChunk();
-      }
-      function debounce(fn, ms=150) { let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
-      document.getElementById('searchInput').addEventListener('input', debounce(applySearchAndRender, 140));
-
-      async function loadFiles() {
-        try {
-          const res = await fetch(FILES_PATH, { cache:'no-store' });
-          if (!res.ok) throw new Error('fetch failed');
-          const files = await res.json();
-          const normalized = (files||[]).map(f=>({ name:f.name, url:f.url, size:toNum(f.size), lastModified:toNum(f.lastModified), thumbnail:f.thumbnail||null }));
-          const seen = new Set(), unique = [];
-          for (const it of normalized) { if (!it.url) continue; if (!seen.has(it.url)){ seen.add(it.url); unique.push(it); } }
-          window.allFiles = unique.slice(0, METADATA_CAP);
-          fullRerender();
-        } catch(e){ console.warn('loadFiles error', e); }
-      }
-
-      function handleServerMsg(msg) {
-        if (!msg || !msg.type) return;
-        if (msg.type === 'full' && Array.isArray(msg.files)) {
-          const arr = msg.files.map(f=>({ name:f.name, url:f.url, size:toNum(f.size), lastModified:toNum(f.lastModified), thumbnail:f.thumbnail||null }));
+  function startPolling() {
+    if (pollTimer) return;
+    pollTimer = setInterval(()=> {
+      fetch(FILES_PATH, { cache:'no-store' })
+        .then(res => res.ok ? res.json() : Promise.reject('err'))
+        .then(files => {
+          const arr = (files||[]).map(f=>({ name:f.name, url:f.url, size:toNum(f.size), lastModified:toNum(f.lastModified), thumbnail:f.thumbnail||null }));
           const seen = new Set(), unique = [];
           for (const it of arr) { if (!it.url) continue; if (!seen.has(it.url)){ seen.add(it.url); unique.push(it); } }
           window.allFiles = unique.slice(0, METADATA_CAP);
           fullRerender();
-        } else if ((msg.type === 'add' || msg.type === 'update') && msg.file) {
-          const file = { name: msg.file.name, url: msg.file.url, size: toNum(msg.file.size), lastModified: toNum(msg.file.lastModified), thumbnail: msg.file.thumbnail||null };
-          const idx = (window.allFiles||[]).findIndex(x => x.url === file.url);
-          if (idx >= 0) window.allFiles[idx] = file; else window.allFiles.unshift(file);
-          if (window.allFiles.length > METADATA_CAP) window.allFiles.length = METADATA_CAP;
-          fullRerender();
-        } else if (msg.type === 'remove') {
-          const ident = msg.url || msg.name;
-          window.allFiles = (window.allFiles||[]).filter(x => x.url !== ident);
-          fullRerender();
-        } else if (msg.type === 'notify' && Array.isArray(msg.files)) {
-          const arr = msg.files.map(f=>({ name:f.name, url:f.url, size:toNum(f.size), lastModified:toNum(f.lastModified), thumbnail:f.thumbnail||null }));
-          const seen = new Set(), unique = [];
-          for (const it of arr) { if (!it.url) continue; if (!seen.has(it.url)){ seen.add(it.url); unique.push(it); } }
-          window.allFiles = unique.slice(0, METADATA_CAP);
-          fullRerender();
-        }
-      }
+        }).catch(()=>{});
+    }, POLL_INTERVAL_MS);
+  }
+  function stopPolling(){ if (pollTimer) { clearInterval(pollTimer); pollTimer=null; } }
 
-      function bufferAndFlush(msg) { pendingMsgs.push(msg); }
-      setInterval(()=> {
-        if (!pendingMsgs.length) return;
-        const batch = pendingMsgs.splice(0, pendingMsgs.length);
-        for (const m of batch) try { handleServerMsg(m); } catch(e){ console.warn('handleServerMsg error', e); }
-      }, BATCH_FLUSH_MS);
+  function copyUrl(url) {
+    if (!url) return;
+    if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(url).catch(()=>{}); }
+    else { const ta=document.createElement('textarea'); ta.value=url; document.body.appendChild(ta); ta.select(); try{ document.execCommand('copy'); } catch(e){} ta.remove(); }
+  }
+  window.copyUrl = copyUrl;
 
-      function connectWebSocket() {
-        try { ws = new WebSocket(WS_PATH); } catch(e){ ws=null; startSSE(); startPolling(); return; }
-        ws.addEventListener('open', ()=>{ reconnectAttempts=0; try{ ws.send(JSON.stringify({ type:'subscribe', channel:'files' })); } catch(e){} });
-        ws.addEventListener('message', ev=>{ try{ const msg = JSON.parse(ev.data); bufferAndFlush(msg); } catch(e){ console.warn('ws parse', e); } });
-        ws.addEventListener('close', ()=>{ ws=null; startSSE(); scheduleReconnect(); });
-        ws.addEventListener('error', ()=>{ try{ ws.close(); } catch(e){} });
-      }
-      function scheduleReconnect(){ reconnectAttempts++; const delay = Math.min(30000, 1000 * Math.pow(1.6, Math.min(10, reconnectAttempts))); setTimeout(()=>{ if (!ws) connectWebSocket(); }, delay); }
+  (function init(){ loadFiles(); connectWebSocket(); setTimeout(()=>{ if (!ws) startSSE(); }, 1500); setTimeout(()=>{ if (!ws && !es) startPolling(); }, 2500);
+    window.addEventListener('beforeunload', ()=>{ try{ if (ws) ws.close(); } catch(e){} try{ if (es) es.close(); } catch(e){} stopPolling(); });
+  })();
 
-      function startSSE() {
-        if (typeof EventSource === 'undefined') { startPolling(); return; }
-        if (es) return;
-        try { es = new EventSource(SSE_PATH); } catch(e){ es=null; startPolling(); return; }
-        es.onmessage = ev => { try{ const msg = JSON.parse(ev.data); bufferAndFlush(msg); } catch(e){ console.warn('sse parse', e); } };
-        es.onerror = ()=>{ try{ es.close(); } catch(e){} es=null; startPolling(); };
-      }
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', ()=>{
+      navigator.serviceWorker.register('sw.js').then(reg=>{ console.log('Service worker registered.', reg); }).catch(err=>{ console.warn('Service worker registration failed:', err); });
+    });
+  }
+</script>
 
-      function startPolling() {
-        if (pollTimer) return;
-        pollTimer = setInterval(()=> {
-          fetch(FILES_PATH, { cache:'no-store' })
-            .then(res => res.ok ? res.json() : Promise.reject('err'))
-            .then(files => {
-              const arr = (files||[]).map(f=>({ name:f.name, url:f.url, size:toNum(f.size), lastModified:toNum(f.lastModified), thumbnail:f.thumbnail||null }));
-              const seen = new Set(), unique = [];
-              for (const it of arr) { if (!it.url) continue; if (!seen.has(it.url)){ seen.add(it.url); unique.push(it); } }
-              window.allFiles = unique.slice(0, METADATA_CAP);
-              fullRerender();
-            }).catch(()=>{});
-        }, POLL_INTERVAL_MS);
-      }
-      function stopPolling(){ if (pollTimer) { clearInterval(pollTimer); pollTimer=null; } }
-
-      function copyUrl(url) {
-        if (!url) return;
-        if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(url).catch(()=>{}); }
-        else { const ta=document.createElement('textarea'); ta.value=url; document.body.appendChild(ta); ta.select(); try{ document.execCommand('copy'); } catch(e){} ta.remove(); }
-      }
-      window.copyUrl = copyUrl;
-
-      (function init(){ loadFiles(); connectWebSocket(); setTimeout(()=>{ if (!ws) startSSE(); }, 1500); setTimeout(()=>{ if (!ws && !es) startPolling(); }, 2500);
-        window.addEventListener('beforeunload', ()=>{ try{ if (ws) ws.close(); } catch(e){} try{ if (es) es.close(); } catch(e){} stopPolling(); });
-      })();
-
-      if ('serviceWorker' in navigator) {
-        window.addEventListener('load', ()=> {
-          navigator.serviceWorker.register('sw.js').then(reg=>{ console.log('Service worker registered.', reg); }).catch(err=>{ console.warn('Service worker registration failed:', err); });
-        });
-      }
-    </script>
   </body>
-  </html>
+</html>
