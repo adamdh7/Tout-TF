@@ -121,7 +121,7 @@
 
   function normalizeString(s) {
     if (!s) return '';
-    try { s = s.normalize('NFKD').replace(/[\u0300-\u036f]/g, ''); } catch(e){}
+    try { s = s.normalize('NFKD').replace(/[̀-ͯ]/g, ''); } catch(e){}
     try { s = s.replace(/[^\p{L}\p{N}]+/gu, ' '); } catch(e) { s = s.replace(/[^A-Za-z0-9]+/g, ' '); }
     return s.replace(/\s+/g,' ').trim().toLowerCase();
   }
@@ -130,9 +130,9 @@
     if (!noExt) return '';
     let s = noExt;
     s = s.replace(/^[0-9]{6,}[_\-]*/, '');
-    s = s.replace(/^[\(\{][^\)\}]*[\]\)\}][_-\s]*/g, '');
+    s = s.replace(/^[\(\{][^\)\}]*[\]\)\}][_\-\s]*/g, '');
     s = s.replace(/^@[^_\-\s]+[_\-\s]*/g, '').replace(/^[_\-]+@[^_\-\s]+[_\-\s]*/g, '');
-    s = s.replace(/[_\-]*@[^_\s\-_]+[_\-]*/g, ' ');
+    s = s.replace(/[_\-]*@[^\s\-_]+[_\-]*/g, ' ');
     s = s.replace(/[_\-\.]/g, ' ');
     s = s.replace(/\s+/g, ' ').trim();
     return s;
@@ -237,17 +237,70 @@
 
     const out = [];
     for (const g of groupArr) {
+      // keep original intra-group ordering for display
       g.items.sort(intraGroupCompare);
 
+      // --- NEW: infer seasons for ambiguous "1" names ---
+      // Strategy:
+      // 1) process items oldest -> newest
+      // 2) preserve explicit seasons
+      // 3) the first encountered ambiguous ep==1 becomes season 1 (unless season 1 already present), subsequent ambiguous ep==1 become next seasons
+
+      const itemsByTime = g.items.slice().sort((a,b)=> toNum(a.lastModified) - toNum(b.lastModified));
+      const assigned = new Map(); // file -> {season, ep}
+      let maxSeason = 0;
+      const assignedSeasons = new Set();
+
+      // pre-seed assignedSeasons and maxSeason with any explicit seasons present
+      for (const it of itemsByTime) {
+        const p = parseParts(it.name || '');
+        if (p.hasSeason) {
+          const s = Number(p.season || 0);
+          assignedSeasons.add(s);
+          if (s > maxSeason) maxSeason = s;
+        }
+      }
+
+      // iterate oldest->newest and assign inferred seasons for ambiguous items
+      for (const it of itemsByTime) {
+        const p = parseParts(it.name || '');
+        let as = null, ae = null;
+        if (p.hasSeason) {
+          as = p.season != null ? Number(p.season) : null;
+          ae = p.ep != null ? Number(p.ep) : (p.hasSeason ? 0 : null);
+          if (as != null) { assigned.set(it, { season: as, ep: ae }); if (as > maxSeason) maxSeason = as; assignedSeasons.add(as); }
+        } else if (p.hasEp) {
+          // ambiguous ep without season
+          if (p.ep === 1) {
+            if (!assignedSeasons.has(1)) {
+              as = 1;
+            } else {
+              as = maxSeason + 1;
+            }
+            ae = 1;
+            assigned.set(it, { season: as, ep: ae }); assignedSeasons.add(as); if (as > maxSeason) maxSeason = as;
+          } else {
+            // e.g. "E2" without season — treat as season 1 (common case)
+            as = 1; ae = p.ep != null ? Number(p.ep) : null; assigned.set(it, { season: as, ep: ae }); assignedSeasons.add(as); if (as > maxSeason) maxSeason = as;
+          }
+        } else {
+          // base-only (no season, no ep) — leave as base
+          assigned.set(it, { season: 'base', ep: 'base' });
+        }
+      }
+
+      // Build ep map using assigned seasons/eps
       const mapEp = new Map();
       for (const it of g.items) {
-        const p = parseParts(it.name || '');
-        const s = (p.season != null) ? p.season : (p.hasEp ? 1 : 'base');
-        const e = (p.ep != null) ? p.ep : (p.hasSeason ? 0 : 'base');
+        const a = assigned.get(it) || { season: 'base', ep: 'base' };
+        const s = (a.season === 'base') ? 'base' : Number(a.season);
+        const e = (a.ep === 'base') ? 'base' : Number(a.ep);
         const key = (s === 'base') ? 'base' : `s${s}e${e}`;
         if (!mapEp.has(key)) mapEp.set(key, []);
         mapEp.get(key).push(it);
       }
+
+      // mark newest per episode key
       for (const [k, arr] of mapEp.entries()) {
         arr.sort((x,y) => toNum(y.lastModified) - toNum(x.lastModified));
         if (arr.length) arr[0].__isNewestForEpisode = true;
@@ -397,7 +450,7 @@
     const copyAllBtn = document.createElement('button');
     copyAllBtn.className = 'copy-all-btn';
     copyAllBtn.type = 'button';
-    copyAllBtn.title = 'Copier tous les Name_epX_sY + Url de ce groupe (format prédéfini)';
+    copyAllBtn.title = 'Copier tous les Name_epX_sY + Url de ce groupe (format pr\u00e9d\u00e9fini)';
     copyAllBtn.innerHTML = '<span class="icon"></span><span>Copier tout</span>';
 
     copyAllBtn.addEventListener('click', (ev) => {
@@ -406,7 +459,7 @@
 
       copyAllBtn.classList.add('copied');
       const old = copyAllBtn.innerHTML;
-      copyAllBtn.innerHTML = '<span class="icon"></span><span>Copié</span>';
+      copyAllBtn.innerHTML = '<span class="icon"></span><span>Copi\u00e9</span>';
       setTimeout(() => {
         copyAllBtn.classList.remove('copied');
         copyAllBtn.innerHTML = old;
@@ -436,7 +489,7 @@
       div.addEventListener('click', ()=>{ const vid=document.createElement('video'); vid.className='thumb'; vid.src=f.url; vid.controls=true; vid.preload='metadata'; div.replaceWith(vid); }, { once:true });
       preview = div;
     } else {
-      const div = document.createElement('div'); div.className='thumb'; div.style.display='flex'; div.style.alignItems='center'; div.style.justifyContent='center'; div.style.color='#999'; div.textContent='Pas d’aperçu'; preview = div;
+      const div = document.createElement('div'); div.className='thumb'; div.style.display='flex'; div.style.alignItems='center'; div.style.justifyContent='center'; div.style.color='#999'; div.textContent='Pas d\u2019aper\u00e7u'; preview = div;
     }
 
     const info = document.createElement('div'); info.className='info';
@@ -461,7 +514,7 @@
         copyText(digits);
         prefixSpan.classList.add('copied');
         const old = prefixSpan.textContent;
-        prefixSpan.textContent = 'Copié';
+        prefixSpan.textContent = 'Copi\u00e9';
         setTimeout(()=>{
           prefixSpan.classList.remove('copied');
           prefixSpan.textContent = insertSoftBreaks(digits, 40);
