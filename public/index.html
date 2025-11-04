@@ -145,12 +145,17 @@
       /[sS]0*\d+[^\d]*[eE]0*\d+/i,
       /[eE]0*\d+[^\d]*[sS]0*\d+/i,
       /(?:[_\s-]|^)(?:saison|season)[\W_]*0*\d+/i,
-      /(?:[_\s-]|^)[sS]0*\d+/i
+      /(?:[_\s-]|^)[sS]0*\d+/i,
+      // fallback: standalone numeric token (e.g. _10_ or " 10 ") — treat as episode when other tokens absent
+      /(?:[_\s-]|^)(\d{1,3})(?:[_\s-]|$)/
     ];
     let minPos = -1;
     for (const re of patterns) {
       const pos = noExt.search(re);
       if (pos >= 0) { if (minPos === -1 || pos < minPos) minPos = pos; }
+    }
+    return minPos;
+  }
     }
     return minPos;
   }
@@ -167,7 +172,9 @@
   function parseParts(name) {
     const noExt = (name || '').replace(/\.[^.]+$/, '');
     const stripped = stripPrefixes(noExt);
+    // normalize separators for easier regex matching
     const raw = stripped;
+    const rawNorm = raw.replace(/[_\-\.]+/g, ' ').replace(/\s+/g,' ').trim();
 
     let season = null, ep = null, hasSeason = false, hasEp = false;
 
@@ -176,7 +183,7 @@
       /\b(?:saison|season)[\W_]*0*(\d{1,3})/gi
     ];
     for (const re of seasonRegexes) {
-      const m = re.exec(raw);
+      const m = re.exec(rawNorm);
       if (m) { season = toNum(m[1]); hasSeason = true; break; }
     }
 
@@ -185,14 +192,27 @@
       /\b(?:ep(?:isode)?|episode)[\W_]*0*(\d{1,3})/i
     ];
     for (const re of epRegexes) {
-      const m = re.exec(raw);
+      const m = re.exec(rawNorm);
       if (m) { ep = toNum(m[1]); hasEp = true; break; }
+    }
+
+    // If still no ep found, try a standalone numeric token (common in filenames like \"Name_10_Vf_\")
+    if (!hasEp) {
+      const m = rawNorm.match(/(?:^|\s)(\d{1,3})(?:\s|$)/);
+      if (m) {
+        const val = toNum(m[1]);
+        if (val > 0 && val < 1000) { ep = val; hasEp = true; }
+      }
     }
 
     if (hasEp && !hasSeason) season = 1;
 
-    const base = extractBaseName(name);
-    return { base, season, ep, hasSeason, hasEp, raw };
+    // build a cleaner base by removing trailing language tags (vf/vostfr/fr/dub) and numeric tokens
+    let baseRaw = rawNorm.replace(/\b(vf|vostfr|vost|fr|sub|dub)\b/gi, '').replace(/\b\d{1,4}\b/g, '').replace(/\s+/g,' ').trim();
+    if (!baseRaw) baseRaw = rawNorm;
+
+    const base = normalizeString(baseRaw);
+    return { base, season, ep, hasSeason, hasEp, raw: rawNorm };
   }
 
   function intraGroupCompare(a, b) {
