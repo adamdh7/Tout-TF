@@ -21,34 +21,12 @@
       .card { background:#fff; border-radius:18px; box-shadow:0 3px 6px rgba(0,0,0,0.08); overflow:hidden; transition:.25s; display:flex; flex-direction:column; }
       .card:hover { transform: translateY(-3px); }
       .thumb { width:100%; aspect-ratio: 16/9; object-fit:cover; background:#f1f1f1; }
-      .info { padding:12px 16px; display:flex; flex-direction:column; gap:8px; }  /* ========== IMPORTANT: long text handling ========== */
-
-      /* allow breaking inside long unbroken strings by inserting soft breaks via JS */
-      .name, .suburl, .group-title {
-        overflow-wrap: anywhere;
-        word-break: break-word;
-        -webkit-hyphens: auto;
-        hyphens: auto;
-        white-space: normal;
-      }
-
-      /* full name display (no clamp) */
-      .name {
-        font-weight:600;
-        font-size:15px;
-        display:block;
-        margin:0;
-      }
-
-      .suburl {
-        font-size:11px;
-        color:#888;
-        display:block;
-      }
-
+      .info { padding:12px 16px; display:flex; flex-direction:column; gap:8px; }
+      .name, .suburl, .group-title { overflow-wrap: anywhere; word-break: break-word; -webkit-hyphens: auto; hyphens: auto; white-space: normal; }
+      .name { font-weight:600; font-size:15px; display:block; margin:0; }
+      .suburl { font-size:11px; color:#888; display:block; }
       .group-head { grid-column: 1 / -1; padding:8px 12px; background:rgba(0,0,0,0.03); border-radius:12px; font-weight:700; color:#222; display:flex; justify-content:space-between; align-items:center; gap:12px; }
       .group-title { flex:1 1 auto; display:inline-block; white-space: normal; overflow:visible; text-overflow:unset; }
-
       .meta { font-size:13px; color:#777; }
       .actions { display:flex; gap:8px; flex-wrap:wrap; }
       button { background:#007aff; border:none; color:white; padding:8px 12px; border-radius:10px; cursor:pointer; }
@@ -56,36 +34,11 @@
       .small-btn { padding:6px 10px; font-size:13px; background:#111827; color:#fff; border-radius:8px; border:none; }
       .empty { text-align:center; color:#888; margin-top:40px; }
       .badge { background:#ef4444; color:#fff; padding:4px 8px; border-radius:999px; font-size:12px; font-weight:700; margin-left:8px; }
-
-      .group-head .group-right { display:flex; align-items:center; gap:8px; flex-shrink:0; }
-      .copy-all-btn {
-        padding: 6px 10px;
-        font-size: 13px;
-        background: #111827;
-        color: #fff;
-        border-radius: 8px;
-        border: none;
-        cursor: pointer;
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        white-space: nowrap;
-      }
+      .copy-all-btn { padding: 6px 10px; font-size: 13px; background: #111827; color: #fff; border-radius: 8px; border: none; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
       .copy-all-btn.copied { background: #10b981; transition: background 180ms; }
-      .copy-all-btn .icon { font-size: 12px; opacity: 0.95; }
-
-      /* prefix inline clickable span (now part of the name string) */
-      .prefix-span {
-        cursor: pointer;
-        user-select: all;
-        -webkit-user-select: all;
-        border-radius: 4px;
-        padding: 0 2px;
-      }
+      .prefix-span { cursor: pointer; user-select: all; -webkit-user-select: all; border-radius: 4px; padding: 0 2px; }
       .prefix-span:hover { background: rgba(0,0,0,0.03); }
       .prefix-span.copied { background: #10b981; color: white; transition: background 120ms; }
-
-      /* make long container content wrap nicely */
       .info { word-break: break-word; }
     </style>
   </head>
@@ -121,7 +74,7 @@
 
   function normalizeString(s) {
     if (!s) return '';
-    try { s = s.normalize('NFKD').replace(/[̀-ͯ]/g, ''); } catch(e){}
+    try { s = s.normalize('NFKD').replace(/[\u0300-\u036f]/g, ''); } catch(e){}
     try { s = s.replace(/[^\p{L}\p{N}]+/gu, ' '); } catch(e) { s = s.replace(/[^A-Za-z0-9]+/g, ' '); }
     return s.replace(/\s+/g,' ').trim().toLowerCase();
   }
@@ -130,10 +83,10 @@
     if (!noExt) return '';
     let s = noExt;
     s = s.replace(/^[0-9]{6,}[_\-]*/, '');
-    s = s.replace(/^[\(\{][^\)\}]*[\]\)\}][_\-\s]*/g, '');
+    s = s.replace(/^[\(\{][^\)\}]*[\]\)\}][_-\s]*/g, '');
     s = s.replace(/^@[^_\-\s]+[_\-\s]*/g, '').replace(/^[_\-]+@[^_\-\s]+[_\-\s]*/g, '');
-    s = s.replace(/[_\-]*@[^\s\-_]+[_\-]*/g, ' ');
-    s = s.replace(/[_\-\.]/g, ' ');
+    s = s.replace(/[_\-]*@[^_\s\-_]+[_\-]*/g, ' ');
+    s = s.replace(/[_\-\.]+/g, ' ');
     s = s.replace(/\s+/g, ' ').trim();
     return s;
   }
@@ -146,16 +99,13 @@
       /[eE]0*\d+[^\d]*[sS]0*\d+/i,
       /(?:[_\s-]|^)(?:saison|season)[\W_]*0*\d+/i,
       /(?:[_\s-]|^)[sS]0*\d+/i,
-      // fallback: standalone numeric token (e.g. _10_ or " 10 ") — treat as episode when other tokens absent
+      // fallback: standalone numeric token (e.g. _10_ or " 10 ")
       /(?:[_\s-]|^)(\d{1,3})(?:[_\s-]|$)/
     ];
     let minPos = -1;
     for (const re of patterns) {
       const pos = noExt.search(re);
       if (pos >= 0) { if (minPos === -1 || pos < minPos) minPos = pos; }
-    }
-    return minPos;
-  }
     }
     return minPos;
   }
@@ -166,15 +116,17 @@
     const stripped = stripPrefixes(noExt);
     const pos = firstTokenIndex(stripped);
     const baseRaw = pos >= 0 ? stripped.slice(0, pos) : stripped;
-    return normalizeString(baseRaw || stripped);
+    // remove language tags and trailing numbers from base for grouping
+    let cleaned = baseRaw.replace(/\b(vf|vostfr|vost|fr|sub|dub)\b/gi, '').replace(/\b\d{1,4}\b/g, '').replace(/[_\-\.\s]+/g,' ').trim();
+    if (!cleaned) cleaned = baseRaw;
+    return normalizeString(cleaned);
   }
 
   function parseParts(name) {
     const noExt = (name || '').replace(/\.[^.]+$/, '');
     const stripped = stripPrefixes(noExt);
-    // normalize separators for easier regex matching
     const raw = stripped;
-    const rawNorm = raw.replace(/[_\-\.]+/g, ' ').replace(/\s+/g,' ').trim();
+    const rawNorm = raw.replace(/[_\-\.\s]+/g, ' ').replace(/\s+/g,' ').trim();
 
     let season = null, ep = null, hasSeason = false, hasEp = false;
 
@@ -196,7 +148,7 @@
       if (m) { ep = toNum(m[1]); hasEp = true; break; }
     }
 
-    // If still no ep found, try a standalone numeric token (common in filenames like \"Name_10_Vf_\")
+    // fallback: standalone numeric token (common in filenames like "Name_10_Vf_")
     if (!hasEp) {
       const m = rawNorm.match(/(?:^|\s)(\d{1,3})(?:\s|$)/);
       if (m) {
@@ -207,7 +159,7 @@
 
     if (hasEp && !hasSeason) season = 1;
 
-    // build a cleaner base by removing trailing language tags (vf/vostfr/fr/dub) and numeric tokens
+    // build a cleaner base by removing language tags and numeric tokens
     let baseRaw = rawNorm.replace(/\b(vf|vostfr|vost|fr|sub|dub)\b/gi, '').replace(/\b\d{1,4}\b/g, '').replace(/\s+/g,' ').trim();
     if (!baseRaw) baseRaw = rawNorm;
 
@@ -257,54 +209,54 @@
 
     const out = [];
     for (const g of groupArr) {
-      // keep original intra-group ordering for display
+      // sort items initially for deterministic behavior
       g.items.sort(intraGroupCompare);
 
-      // --- NEW: infer seasons for ambiguous "1" names ---
-      // Strategy:
-      // 1) process items oldest -> newest
-      // 2) preserve explicit seasons
-      // 3) the first encountered ambiguous ep==1 becomes season 1 (unless season 1 already present), subsequent ambiguous ep==1 become next seasons
-
-      const itemsByTime = g.items.slice().sort((a,b)=> toNum(a.lastModified) - toNum(b.lastModified));
-      const assigned = new Map(); // file -> {season, ep}
+      // Infer season numbers for ambiguous files (only client-side, for display/grouping)
+      const itemsByTime = g.items.slice().sort((a,b) => toNum(a.lastModified) - toNum(b.lastModified)); // oldest -> newest
+      const assigned = new Map(); // map from item object to {season, ep}
       let maxSeason = 0;
       const assignedSeasons = new Set();
 
-      // pre-seed assignedSeasons and maxSeason with any explicit seasons present
+      // seed from explicit seasons present
       for (const it of itemsByTime) {
         const p = parseParts(it.name || '');
-        if (p.hasSeason) {
-          const s = Number(p.season || 0);
+        if (p.hasSeason && p.season != null) {
+          const s = Number(p.season);
           assignedSeasons.add(s);
           if (s > maxSeason) maxSeason = s;
         }
       }
 
-      // iterate oldest->newest and assign inferred seasons for ambiguous items
+      // assign
       for (const it of itemsByTime) {
         const p = parseParts(it.name || '');
-        let as = null, ae = null;
         if (p.hasSeason) {
-          as = p.season != null ? Number(p.season) : null;
-          ae = p.ep != null ? Number(p.ep) : (p.hasSeason ? 0 : null);
-          if (as != null) { assigned.set(it, { season: as, ep: ae }); if (as > maxSeason) maxSeason = as; assignedSeasons.add(as); }
+          const as = p.season != null ? Number(p.season) : null;
+          const ae = p.ep != null ? Number(p.ep) : (p.hasSeason ? 0 : null);
+          assigned.set(it, { season: as, ep: ae });
+          if (as != null) { assignedSeasons.add(as); if (as > maxSeason) maxSeason = as; }
         } else if (p.hasEp) {
-          // ambiguous ep without season
+          // ambiguous ep without explicit season
           if (p.ep === 1) {
             if (!assignedSeasons.has(1)) {
-              as = 1;
+              assigned.set(it, { season: 1, ep: 1 });
+              assignedSeasons.add(1);
+              if (1 > maxSeason) maxSeason = 1;
             } else {
-              as = maxSeason + 1;
+              const ns = maxSeason + 1;
+              assigned.set(it, { season: ns, ep: 1 });
+              assignedSeasons.add(ns);
+              maxSeason = ns;
             }
-            ae = 1;
-            assigned.set(it, { season: as, ep: ae }); assignedSeasons.add(as); if (as > maxSeason) maxSeason = as;
           } else {
-            // e.g. "E2" without season — treat as season 1 (common case)
-            as = 1; ae = p.ep != null ? Number(p.ep) : null; assigned.set(it, { season: as, ep: ae }); assignedSeasons.add(as); if (as > maxSeason) maxSeason = as;
+            // ep > 1 -> treat as season 1 (common)
+            assigned.set(it, { season: 1, ep: Number(p.ep) });
+            assignedSeasons.add(1);
+            if (1 > maxSeason) maxSeason = 1;
           }
         } else {
-          // base-only (no season, no ep) — leave as base
+          // base-only
           assigned.set(it, { season: 'base', ep: 'base' });
         }
       }
@@ -335,7 +287,6 @@
 
   function escapeHtml(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
-  /* copy helper */
   function copyText(text) {
     if (!text) return;
     if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -361,10 +312,8 @@
     }
   }
 
-  /* insert zero-width spaces into long uninterrupted sequences so they can wrap nicely */
   function insertSoftBreaks(str, maxLen = 40) {
     if (!str) return '';
-    // For each sequence of non-whitespace longer than maxLen, insert \u200b every maxLen chars
     return str.replace(/\S+/g, (chunk) => {
       if (chunk.length <= maxLen) return chunk;
       let out = '';
@@ -376,7 +325,6 @@
     });
   }
 
-  /** CopyGroup function (unchanged behavior) **/
   function copyGroup(base) {
     if (!base) return;
     const files = (window.allFiles || []).filter(f => {
@@ -470,7 +418,7 @@
     const copyAllBtn = document.createElement('button');
     copyAllBtn.className = 'copy-all-btn';
     copyAllBtn.type = 'button';
-    copyAllBtn.title = 'Copier tous les Name_epX_sY + Url de ce groupe (format pr\u00e9d\u00e9fini)';
+    copyAllBtn.title = 'Copier tous les Name_epX_sY + Url de ce groupe (format prédéfini)';
     copyAllBtn.innerHTML = '<span class="icon"></span><span>Copier tout</span>';
 
     copyAllBtn.addEventListener('click', (ev) => {
@@ -479,7 +427,7 @@
 
       copyAllBtn.classList.add('copied');
       const old = copyAllBtn.innerHTML;
-      copyAllBtn.innerHTML = '<span class="icon"></span><span>Copi\u00e9</span>';
+      copyAllBtn.innerHTML = '<span class="icon"></span><span>Copié</span>';
       setTimeout(() => {
         copyAllBtn.classList.remove('copied');
         copyAllBtn.innerHTML = old;
@@ -509,54 +457,45 @@
       div.addEventListener('click', ()=>{ const vid=document.createElement('video'); vid.className='thumb'; vid.src=f.url; vid.controls=true; vid.preload='metadata'; div.replaceWith(vid); }, { once:true });
       preview = div;
     } else {
-      const div = document.createElement('div'); div.className='thumb'; div.style.display='flex'; div.style.alignItems='center'; div.style.justifyContent='center'; div.style.color='#999'; div.textContent='Pas d\u2019aper\u00e7u'; preview = div;
+      const div = document.createElement('div'); div.className='thumb'; div.style.display='flex'; div.style.alignItems='center'; div.style.justifyContent='center'; div.style.color='#999'; div.textContent='Pas d’aperçu'; preview = div;
     }
 
     const info = document.createElement('div'); info.className='info';
 
-    // name (no separate button) but prefix digits clickable inline
     const nameDiv = document.createElement('div'); nameDiv.className='name';
 
     const rawName = f.name || '(sans nom)';
-    // detect leading digits
     const leadingMatch = rawName.match(/^(\d+)/);
     if (leadingMatch) {
       const digits = leadingMatch[1];
       const rest = rawName.slice(digits.length);
 
-      // create prefix span (clickable)
       const prefixSpan = document.createElement('span');
       prefixSpan.className = 'prefix-span';
-      prefixSpan.textContent = insertSoftBreaks(digits, 40); // keep soft breaks if digits long
+      prefixSpan.textContent = insertSoftBreaks(digits, 40);
       prefixSpan.title = 'Cliquer pour copier le nombre';
       prefixSpan.addEventListener('click', (ev) => {
         ev.stopPropagation();
         copyText(digits);
         prefixSpan.classList.add('copied');
         const old = prefixSpan.textContent;
-        prefixSpan.textContent = 'Copi\u00e9';
+        prefixSpan.textContent = 'Copié';
         setTimeout(()=>{
           prefixSpan.classList.remove('copied');
           prefixSpan.textContent = insertSoftBreaks(digits, 40);
         }, 1200);
       });
 
-      // rest span (keeps soft breaks)
       const restSpan = document.createElement('span');
-      restSpan.innerHTML = insertSoftBreaks(rest, 40).replace(/\u200b/g, '\u200b'); // keep zwsp
-
-      // append in order so it looks like a single string
-      nameDiv.appendChild(prefixSpan);
-      // append a zero-width joiner if needed to avoid accidental space
-      // but keep original characters exactly (no added spaces)
+      restSpan.innerHTML = insertSoftBreaks(rest, 40).replace(/\u200b/g, '\u200b');
       restSpan.style.whiteSpace = 'pre-wrap';
+
+      nameDiv.appendChild(prefixSpan);
       nameDiv.appendChild(restSpan);
     } else {
-      // no leading digits — just show full name with soft breaks
       nameDiv.textContent = insertSoftBreaks(rawName, 40);
     }
 
-    // append badge if newest for episode
     if (f.__isNewestForEpisode) {
       const badge = document.createElement('span'); badge.className='badge'; badge.textContent='NOUVO';
       nameDiv.appendChild(badge);
