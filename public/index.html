@@ -51,7 +51,6 @@
     <div id="emptyMessage" class="empty" style="display:none;">Aucun fichier trouvé.</div>
 
 <script>
-  // CONFIG
   const FILES_PATH = '/files';
   const WS_PATH = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
   const SSE_PATH = '/events';
@@ -61,7 +60,6 @@
   const MAX_RENDER = 1200;
   const METADATA_CAP = 30000;
 
-  // STATE
   window.allFiles = [];
   window.viewFiles = [];
   let ws = null, es = null, pollTimer = null, reconnectAttempts = 0;
@@ -79,10 +77,19 @@
     return s.replace(/\s+/g,' ').trim().toLowerCase();
   }
 
+  function isImageFile(name) {
+    return !!(name || '').match(/\.(jpg|jpeg|png|gif|webp)$/i);
+  }
+
+  function removeBracketed(s) {
+    if (!s) return s;
+    return s.replace(/[\(\[\{][^\)\]\}]*[\)\]\}]/g, '').replace(/\s+/g,' ').trim();
+  }
+
   function stripPrefixes(noExt) {
     if (!noExt) return '';
     let s = noExt;
-    s = s.replace(/^[0-9]{6,}[_\-]*/, '');
+    s = s.replace(/^[0-9]{10,}[_\-]*/, '');
     s = s.replace(/^[\(\{][^\)\}]*[\]\)\}][_-\s]*/g, '');
     s = s.replace(/^@[^_\-\s]+[_\-\s]*/g, '').replace(/^[_\-]+@[^_\-\s]+[_\-\s]*/g, '');
     s = s.replace(/[_\-]*@[^_\s\-_]+[_\-]*/g, ' ');
@@ -99,7 +106,6 @@
       /[eE]0*\d+[^\d]*[sS]0*\d+/i,
       /(?:[_\s-]|^)(?:saison|season)[\W_]*0*\d+/i,
       /(?:[_\s-]|^)[sS]0*\d+/i,
-      // fallback: standalone numeric token (e.g. _10_ or " 10 ")
       /(?:[_\s-]|^)(\d{1,3})(?:[_\s-]|$)/
     ];
     let minPos = -1;
@@ -113,17 +119,28 @@
   function extractBaseName(name) {
     if (!name) return '';
     const noExt = name.replace(/\.[^.]+$/, '');
+    if (isImageFile(name)) {
+      let cleaned = noExt.replace(/[^\p{L}\p{N}_\-\.\s]/gu, '');
+      cleaned = removeBracketed(cleaned);
+      cleaned = cleaned.replace(/[_\-\.\s]+/g, ' ').trim();
+      return normalizeString(cleaned);
+    }
     const stripped = stripPrefixes(noExt);
     const pos = firstTokenIndex(stripped);
     const baseRaw = pos >= 0 ? stripped.slice(0, pos) : stripped;
-    // remove language tags and trailing numbers from base for grouping
     let cleaned = baseRaw.replace(/\b(vf|vostfr|vost|fr|sub|dub)\b/gi, '').replace(/\b\d{1,4}\b/g, '').replace(/[_\-\.\s]+/g,' ').trim();
     if (!cleaned) cleaned = baseRaw;
+    cleaned = removeBracketed(cleaned);
     return normalizeString(cleaned);
   }
 
   function parseParts(name) {
     const noExt = (name || '').replace(/\.[^.]+$/, '');
+    if (isImageFile(name)) {
+      const rawNorm = removeBracketed(noExt).replace(/[_\-\.\s]+/g, ' ').replace(/\s+/g,' ').trim();
+      const base = normalizeString(rawNorm);
+      return { base, season: null, ep: null, hasSeason: false, hasEp: false, raw: rawNorm };
+    }
     const stripped = stripPrefixes(noExt);
     const raw = stripped;
     const rawNorm = raw.replace(/[_\-\.\s]+/g, ' ').replace(/\s+/g,' ').trim();
@@ -148,7 +165,6 @@
       if (m) { ep = toNum(m[1]); hasEp = true; break; }
     }
 
-    // fallback: standalone numeric token (common in filenames like "Name_10_Vf_")
     if (!hasEp) {
       const m = rawNorm.match(/(?:^|\s)(\d{1,3})(?:\s|$)/);
       if (m) {
@@ -159,10 +175,10 @@
 
     if (hasEp && !hasSeason) season = 1;
 
-    // build a cleaner base by removing language tags and numeric tokens
     let baseRaw = rawNorm.replace(/\b(vf|vostfr|vost|fr|sub|dub)\b/gi, '').replace(/\b\d{1,4}\b/g, '').replace(/\s+/g,' ').trim();
     if (!baseRaw) baseRaw = rawNorm;
 
+    baseRaw = removeBracketed(baseRaw);
     const base = normalizeString(baseRaw);
     return { base, season, ep, hasSeason, hasEp, raw: rawNorm };
   }
@@ -209,16 +225,13 @@
 
     const out = [];
     for (const g of groupArr) {
-      // sort items initially for deterministic behavior
       g.items.sort(intraGroupCompare);
 
-      // Infer season numbers for ambiguous files (only client-side, for display/grouping)
-      const itemsByTime = g.items.slice().sort((a,b) => toNum(a.lastModified) - toNum(b.lastModified)); // oldest -> newest
-      const assigned = new Map(); // map from item object to {season, ep}
+      const itemsByTime = g.items.slice().sort((a,b) => toNum(a.lastModified) - toNum(b.lastModified));
+      const assigned = new Map();
       let maxSeason = 0;
       const assignedSeasons = new Set();
 
-      // seed from explicit seasons present
       for (const it of itemsByTime) {
         const p = parseParts(it.name || '');
         if (p.hasSeason && p.season != null) {
@@ -228,7 +241,6 @@
         }
       }
 
-      // assign
       for (const it of itemsByTime) {
         const p = parseParts(it.name || '');
         if (p.hasSeason) {
@@ -237,7 +249,6 @@
           assigned.set(it, { season: as, ep: ae });
           if (as != null) { assignedSeasons.add(as); if (as > maxSeason) maxSeason = as; }
         } else if (p.hasEp) {
-          // ambiguous ep without explicit season
           if (p.ep === 1) {
             if (!assignedSeasons.has(1)) {
               assigned.set(it, { season: 1, ep: 1 });
@@ -250,18 +261,15 @@
               maxSeason = ns;
             }
           } else {
-            // ep > 1 -> treat as season 1 (common)
             assigned.set(it, { season: 1, ep: Number(p.ep) });
             assignedSeasons.add(1);
             if (1 > maxSeason) maxSeason = 1;
           }
         } else {
-          // base-only
           assigned.set(it, { season: 'base', ep: 'base' });
         }
       }
 
-      // Build ep map using assigned seasons/eps
       const mapEp = new Map();
       for (const it of g.items) {
         const a = assigned.get(it) || { season: 'base', ep: 'base' };
@@ -272,7 +280,6 @@
         mapEp.get(key).push(it);
       }
 
-      // mark newest per episode key
       for (const [k, arr] of mapEp.entries()) {
         arr.sort((x,y) => toNum(y.lastModified) - toNum(x.lastModified));
         if (arr.length) arr[0].__isNewestForEpisode = true;
@@ -400,8 +407,8 @@
 
     const left = document.createElement('div');
     left.className = 'group-title';
-    const displayBase = (f.base ? f.base.replace(/\s+/g,' ') : '(sans nom)');
-    left.textContent = insertSoftBreaks(displayBase, 40);
+    const rawDisplay = (f.base ? f.base.replace(/\s+/g,' ') : '(sans nom)');
+    left.textContent = insertSoftBreaks(removeBracketed(rawDisplay), 40);
     head.appendChild(left);
 
     const rightWrap = document.createElement('div');
@@ -466,9 +473,12 @@
 
     const rawName = f.name || '(sans nom)';
     const leadingMatch = rawName.match(/^(\d+)/);
+    const displayRaw = removeBracketed(rawName.replace(/\.[^.]+$/, ''));
+
     if (leadingMatch) {
       const digits = leadingMatch[1];
       const rest = rawName.slice(digits.length);
+      const restDisplay = removeBracketed(rest.replace(/\.[^.]+$/, '')).trim();
 
       const prefixSpan = document.createElement('span');
       prefixSpan.className = 'prefix-span';
@@ -487,13 +497,13 @@
       });
 
       const restSpan = document.createElement('span');
-      restSpan.innerHTML = insertSoftBreaks(rest, 40).replace(/\u200b/g, '\u200b');
+      restSpan.innerHTML = insertSoftBreaks(restDisplay || rest, 40).replace(/\u200b/g, '\u200b');
       restSpan.style.whiteSpace = 'pre-wrap';
 
       nameDiv.appendChild(prefixSpan);
       nameDiv.appendChild(restSpan);
     } else {
-      nameDiv.textContent = insertSoftBreaks(rawName, 40);
+      nameDiv.textContent = insertSoftBreaks(displayRaw, 40);
     }
 
     if (f.__isNewestForEpisode) {
@@ -611,7 +621,7 @@
       window.allFiles = (window.allFiles||[]).filter(x => x.url !== ident);
       fullRerender();
     } else if (msg.type === 'notify' && Array.isArray(msg.files)) {
-      const arr = msg.files.map(f=>({ name:f.name, url:f.url, size:toNum(f.size), lastModified:toNum(f.lastModified), thumbnail:f.thumbnail||null }));
+      const arr = msg.files.map(f=>({ name:f.name, url:f.url, size:toNum(f.size), lastModified:toNum(f.lastModified), thumbnail:f.filethumbnail||null }));
       const seen = new Set(), unique = [];
       for (const it of arr) { if (!it.url) continue; if (!seen.has(it.url)){ seen.add(it.url); unique.push(it); } }
       window.allFiles = unique.slice(0, METADATA_CAP);
@@ -672,10 +682,11 @@
 
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', ()=>{
-      navigator.serviceWorker.register('sw.js').then(reg=>{ console.log('Service worker registered.', reg); }).catch(err=>{ console.warn('Service worker registration failed:', err); });
+      navigator.serviceWorker.register('sw.js').then(reg=>{ }).catch(err=>{ });
     });
   }
 </script>
 
   </body>
 </html>
+```0
