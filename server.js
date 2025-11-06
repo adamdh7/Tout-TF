@@ -177,9 +177,11 @@ async function listAllObjectsPaginated(cfg, continuationToken) {
   }
   return all;
 }
+
 function isImageKey(key) {
-  return /\.(png|jpe?g)$/i.test(String(key || ''));
+  return /\.png(?:$|\?)/i.test(String(key || ''));
 }
+
 function chunkArray(arr, n) {
   const out = [];
   for (let i=0;i<arr.length;i+=n) out.push(arr.slice(i,i+n));
