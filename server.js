@@ -1,30 +1,17 @@
 require('dotenv').config();
 const express = require('express');
-const { S3Client, ListObjectsV2Command } = require('@aws-sdk/client-s3');
+const { S3Client, ListObjectsV2Command, DeleteObjectsCommand } = require('@aws-sdk/client-s3');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-/**
- * Normalize URL: remove surrounding quotes/whitespace, ensure http/https,
- * trim duplicate slashes at end.
- */
 function normalizePublicUrl(raw) {
   if (!raw) return '';
   let u = String(raw).trim().replace(/^["']|["']$/g, '').replace(/\s+/g, '');
-  // ensure scheme
-  if (!/^https?:\/\//i.test(u)) {
-    u = 'https://' + u;
-  }
-  // remove double slashes after protocol (e.g. "https:////")
+  if (!/^https?:\/\//i.test(u)) u = 'https://' + u;
   u = u.replace(/^(https?:)\/+/i, (m, p1) => p1 + '//');
-  // remove trailing slashes
   u = u.replace(/\/+$/g, '');
   return u;
 }
-
-/**
- * Join base + path safely
- */
 function joinUrl(base, path) {
   if (!base) return path ? `${encodeURIComponent(path)}` : '';
   const b = String(base).replace(/\/+$/g, '');
@@ -32,45 +19,19 @@ function joinUrl(base, path) {
   return p ? `${b}/${encodeURIComponent(p)}` : b;
 }
 
-/**
- * Scan process.env for keys that look like R2 / RE sets.
- *
- * Supports patterns like:
- *  - R2_BUCKET
- *  - R2_BUCKET_2
- *  - R2_2_BUCKET
- *  - R2_ACCESS_KEY_ID_3
- *  - RE_BUCKET_4
- *
- * Groups are keyed by `${prefix}${suffix ? '_' + suffix : ''}` (e.g. "R2", "R2_2")
- */
 function makeConfigsFromEnv() {
   const wantedProps = [
-    'BUCKET',
-    'ENDPOINT',
-    'ACCESS_KEY_ID',
-    'ACCESS_KEY',
-    'SECRET_ACCESS_KEY',
-    'SECRET',
-    'PUBLIC_URL',
-    'REGION',
-    'FRONTEND_ORIGIN',
-    'CF_ACCOUNT_ID',
+    'BUCKET','ENDPOINT','ACCESS_KEY_ID','ACCESS_KEY','SECRET_ACCESS_KEY','SECRET',
+    'PUBLIC_URL','REGION','FRONTEND_ORIGIN','CF_ACCOUNT_ID',
   ];
-
-  const groups = {}; // key -> { prefix, suffix, raw: {PROP: value, ...} }
-
+  const groups = {};
   for (const [k, v] of Object.entries(process.env)) {
-    // normalize key
     const key = k.trim();
-
-    // Pattern A: PREFIX[_]PROP[_]SUFFIX  e.g. R2_BUCKET_2
     let m = key.match(/^([A-Z0-9]+?)_([A-Z0-9_]+?)(?:_([0-9]+))?$/i);
     if (m) {
       const prefix = m[1];
       const prop = m[2];
       const suffix = m[3] || '';
-      // Accept only if prop is one we expect (or maps to one)
       const up = prop.toUpperCase();
       if (wantedProps.some(w => up === w || up === w.replace(/_/g, ''))) {
         const groupKey = `${prefix}${suffix ? '_' + suffix : ''}`;
@@ -79,8 +40,6 @@ function makeConfigsFromEnv() {
         continue;
       }
     }
-
-    // Pattern B: PREFIX[_]SUFFIX[_]PROP  e.g. R2_2_BUCKET or R2_2_ACCESS_KEY_ID
     m = key.match(/^([A-Z0-9]+?)_([0-9]+)_([A-Z0-9_]+)$/i);
     if (m) {
       const prefix = m[1];
@@ -96,11 +55,9 @@ function makeConfigsFromEnv() {
     }
   }
 
-  // Map groups into final configs (try to be forgiving with property names)
   const configs = [];
   for (const [groupKey, info] of Object.entries(groups)) {
     const r = info.raw;
-    // Normalize alternative names:
     const accessKey = r.ACCESS_KEY_ID || r.ACCESS_KEY || r['ACCESSKEY'] || r['ACCESSKEYID'];
     const secretKey = r.SECRET_ACCESS_KEY || r.SECRET || r['SECRETKEY'];
     const bucket = r.BUCKET || r.BUCKET_NAME || r['BUCKETNAME'];
@@ -114,15 +71,11 @@ function makeConfigsFromEnv() {
       const client = new S3Client({
         region,
         endpoint,
-        credentials: {
-          accessKeyId: accessKey,
-          secretAccessKey: secretKey,
-        },
+        credentials: { accessKeyId: accessKey, secretAccessKey: secretKey },
         forcePathStyle: false,
       });
-
       configs.push({
-        id: groupKey, // e.g. "R2", "R2_2", "RE_3"
+        id: groupKey,
         prefix: info.prefix,
         suffix: info.suffix,
         bucket,
@@ -133,7 +86,6 @@ function makeConfigsFromEnv() {
         account,
       });
     } else {
-      // Keep a lightweight "error" representation so frontend can show misconfigured sets
       configs.push({
         id: groupKey,
         prefix: info.prefix,
@@ -143,12 +95,6 @@ function makeConfigsFromEnv() {
       });
     }
   }
-
-  // If nothing found, add fallback attempt using older SUFFIXES convention (empty set)
-  if (configs.length === 0) {
-    // no config discovered
-  }
-
   return configs;
 }
 
@@ -183,14 +129,12 @@ app.get('/files', async (req, res) => {
   try {
     const lists = await Promise.all(configs.map((c) => listFilesForConfig(c)));
     const flat = lists.flat().filter(Boolean);
-
     const normalFiles = flat.filter((f) => !f.error && f.name);
     normalFiles.sort((a, b) => {
       const ta = a.lastModified ? new Date(a.lastModified).getTime() : 0;
       const tb = b.lastModified ? new Date(b.lastModified).getTime() : 0;
       return tb - ta || a.name.localeCompare(b.name);
     });
-
     const errorEntries = flat.filter((f) => f.error);
     res.json([...errorEntries, ...normalFiles]);
   } catch (err) {
@@ -213,6 +157,116 @@ app.get('/files/:setId', async (req, res) => {
       return tb - ta || a.name.localeCompare(b.name);
     });
     res.json({ ok: true, set: cfg.id, files: list });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+async function listAllObjectsPaginated(cfg, continuationToken) {
+  const all = [];
+  let token = continuationToken;
+  while (true) {
+    const params = { Bucket: cfg.bucket, MaxKeys: 1000, ContinuationToken: token };
+    const resp = await cfg.client.send(new ListObjectsV2Command(params));
+    const contents = resp.Contents || [];
+    for (const f of contents) {
+      all.push(f);
+    }
+    if (!resp.IsTruncated) break;
+    token = resp.NextContinuationToken;
+  }
+  return all;
+}
+function isImageKey(key) {
+  return /\.(png|jpe?g)$/i.test(String(key || ''));
+}
+function chunkArray(arr, n) {
+  const out = [];
+  for (let i=0;i<arr.length;i+=n) out.push(arr.slice(i,i+n));
+  return out;
+}
+
+app.get('/prune', async (req, res) => {
+  const ttl = parseInt(req.query.ttl || '86400', 10);
+  const dry = String(req.query.dry || 'false') === 'true';
+  try {
+    const results = [];
+    const cutoff = Date.now() - (ttl * 1000);
+    for (const cfg of configs) {
+      if (cfg.error) { results.push({ set: cfg.id, error: cfg.error }); continue; }
+      try {
+        const objs = await listAllObjectsPaginated(cfg);
+        const toDelete = objs
+          .filter(o => o.Key && isImageKey(o.Key) && o.LastModified && new Date(o.LastModified).getTime() < cutoff)
+          .map(o => String(o.Key));
+        if (toDelete.length === 0) {
+          results.push({ set: cfg.id, deleted: 0, dry, items: [] });
+          continue;
+        }
+        if (dry) {
+          results.push({ set: cfg.id, deleted: toDelete.length, dry: true, items: toDelete.slice(0, 1000) });
+          continue;
+        }
+        const batches = chunkArray(toDelete, 1000);
+        const deletedNames = [];
+        const errors = [];
+        for (const batch of batches) {
+          const delReq = {
+            Bucket: cfg.bucket,
+            Delete: { Objects: batch.map(k => ({ Key: k })) },
+          };
+          try {
+            const delResp = await cfg.client.send(new DeleteObjectsCommand(delReq));
+            const deleted = delResp.Deleted || [];
+            const err = delResp.Errors || [];
+            deleted.forEach(d => deletedNames.push(d.Key));
+            err.forEach(e => errors.push({ Key: e.Key, Code: e.Code, Message: e.Message }));
+          } catch (e) {
+            errors.push({ error: String(e) });
+          }
+        }
+        results.push({ set: cfg.id, deleted: deletedNames.length, dry: false, items: deletedNames, errors });
+      } catch (e) {
+        results.push({ set: cfg.id, error: String(e) });
+      }
+    }
+    res.json({ ok: true, ttl, dry: !!dry, results });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+app.get('/prune/:setId', async (req, res) => {
+  const setId = req.params.setId;
+  const ttl = parseInt(req.query.ttl || '86400', 10);
+  const dry = String(req.query.dry || 'false') === 'true';
+  const cfg = configs.find(c => c.id === setId);
+  if (!cfg) return res.status(404).json({ ok: false, error: 'set not found' });
+  if (cfg.error) return res.status(400).json({ ok: false, error: cfg.error });
+  try {
+    const cutoff = Date.now() - (ttl * 1000);
+    const objs = await listAllObjectsPaginated(cfg);
+    const toDelete = objs
+      .filter(o => o.Key && isImageKey(o.Key) && o.LastModified && new Date(o.LastModified).getTime() < cutoff)
+      .map(o => String(o.Key));
+    if (toDelete.length === 0) return res.json({ ok: true, set: cfg.id, deleted: 0, items: [] });
+    if (dry) return res.json({ ok: true, set: cfg.id, deleted: toDelete.length, dry: true, items: toDelete.slice(0, 1000) });
+    const batches = chunkArray(toDelete, 1000);
+    const deletedNames = [];
+    const errors = [];
+    for (const batch of batches) {
+      const delReq = { Bucket: cfg.bucket, Delete: { Objects: batch.map(k => ({ Key: k })) } };
+      try {
+        const delResp = await cfg.client.send(new DeleteObjectsCommand(delReq));
+        const deleted = delResp.Deleted || [];
+        const err = delResp.Errors || [];
+        deleted.forEach(d => deletedNames.push(d.Key));
+        err.forEach(e => errors.push({ Key: e.Key, Code: e.Code, Message: e.Message }));
+      } catch (e) {
+        errors.push({ error: String(e) });
+      }
+    }
+    res.json({ ok: true, set: cfg.id, deleted: deletedNames.length, items: deletedNames, errors });
   } catch (err) {
     res.status(500).json({ ok: false, error: String(err) });
   }
