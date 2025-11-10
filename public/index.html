@@ -28,8 +28,6 @@
     .info{padding:12px 14px;display:flex;flex-direction:column;gap:8px}
     .name{font-weight:600;font-size:15px;word-break:break-word;white-space:normal}
     .suburl{font-size:11px;color:#888;word-break:anywhere}
-    .group-head{grid-column:1/-1;padding:8px 12px;background:rgba(0,0,0,0.03);border-radius:12px;font-weight:700;color:#222;display:flex;justify-content:space-between;align-items:center;gap:12px}
-    .season-head{grid-column:1/-1;padding:6px 12px;background:rgba(0,0,0,0.02);border-radius:10px;font-weight:700;color:#333;display:flex;justify-content:flex-start;align-items:center;gap:12px}
     .meta{font-size:13px;color:#777}
     .actions{display:flex;gap:8px;flex-wrap:wrap}
     button{background:#007aff;border:none;color:#fff;padding:8px 12px;border-radius:10px;cursor:pointer}
@@ -67,9 +65,7 @@
     CHUNK_SIZE: 50,
     MAX_RENDER: 1200,
     METADATA_CAP: 30000,
-    FLUSH_BATCH_ON_SCROLL: 4,
-    AUTO_FLUSH_ON_SCROLL: true,
-    SILENT_FLUSH_INTERVAL_MS: 5000
+    MAX_VIDEOS_RENDER: 8
   };
 
   const toNum = v => (v === undefined || v === null) ? 0 : Number(v) || 0;
@@ -79,7 +75,6 @@
   window.viewFiles = [];
   let ws = null, es = null, pollTimer = null, reconnectAttempts = 0;
   let pendingMsgs = [];
-  let silentLogCache = [];
   let renderedCount = 0;
   let sentinelObserver = null;
 
@@ -98,171 +93,33 @@
     return s.replace(/[\(\{][^\)\}]*[\]\)\}]/g,'').replace(/\s+/g,' ').trim();
   }
 
-  function stripPrefixes(noExt){
-    if(!noExt) return '';
-    let s = noExt;
-    s = s.replace(/^[0-9]{6,}[_\-]*/,'');
-    s = s.replace(/^[\{\[][^)\}]*[\)\]\}][_-\s]*/,'');
-    s = s.replace(/^@[^_\-\s]+[_\-\s]*/g,'').replace(/^[_\-]+@[^_\-\s]+[_\-\s]*/g,'');
-    s = s.replace(/[_\-]*@[^_\s\-_]+[_\-]*/g,' ');
-    s = s.replace(/[_\-\.\s]+/g,' ');
-    s = s.replace(/\s+/g,' ').trim();
-    return s;
+  function insertSoftBreaks(str,maxLen=40){
+    if(!str) return '';
+    return str.replace(/\S+/g, (chunk) => {
+      if(chunk.length <= maxLen) return chunk;
+      let out = '';
+      for(let i=0;i<chunk.length;i+=maxLen){ out += chunk.slice(i,i+maxLen); if(i+maxLen<chunk.length) out += '\u200b'; }
+      return out;
+    });
   }
 
-  function _removeSeasonEpisodeTokens(raw){
-    if(!raw) return raw;
-    let s = String(raw);
-
-    const patterns = [
-      /[sS][\s._\-:]*0*(\d{1,3})[\s._\-]*[eE][\s._\-:]*0*(\d{1,3})/g,
-      /[eE][\s._\-:]*0*(\d{1,3})[\s._\-]*[sS][\s._\-:]*0*(\d{1,3})/g,
-      /\b(?:season|saison)[\s._\-:]*0*(\d{1,3})[\s,._\-]*\b(?:ep(?:isode)?|e)[\s._\-:]*0*(\d{1,3})/ig,
-      /\b(?:ep(?:isode)?|episode)[\s._\-:]*0*(\d{1,3})[\s,._\-]*\b(?:season|saison)[\s._\-:]*0*(\d{1,3})/ig,
-      /\b[sS][\s._\-:]*0*(\d{1,3})\b/g,
-      /\b(?:season|saison)[\s._\-:]*0*(\d{1,3})\b/ig,
-      /\b[eE][\s._\-:]*0*(\d{1,3})\b/g,
-      /\b(?:ep(?:isode)?|episode)[\s._\-:]*0*(\d{1,3})\b/ig
-    ];
-
-    for(const re of patterns){
-      s = s.replace(re, ' ');
+  function copyText(text){
+    if(!text) return;
+    if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).catch(()=>{});
+    else{
+      const ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.left='-9999px'; document.body.appendChild(ta);
+      ta.select(); try{ document.execCommand('copy'); }catch(e){} ta.remove();
     }
-    s = s.replace(/[\(\{][^\)\}]*[\]\)\}]/g,' ');
-    s = s.replace(/[_\-\.\s]+/g,' ').trim();
-    return s;
   }
 
-  function extractBaseName(name){
-    if(!name) return '';
-    const noExt = name.replace(/\.[^.]+$/,'');
-    if(isImageFile(name)){
-      let cleaned = noExt.replace(/[^\p{L}\p{N}_\-\.\s]/gu,'');
-      cleaned = _removeSeasonEpisodeTokens(cleaned);
-      return normalizeString(cleaned);
-    }
-    let stripped = stripPrefixes(noExt);
-    const cleanedNoTokens = _removeSeasonEpisodeTokens(stripped);
-    let cleaned = cleanedNoTokens.replace(/\b(vf|vostfr|vost|fr|sub|dub)\b/gi,'').replace(/\b\d{2,6}\b/g,'').replace(/\s+/g,' ').trim();
-    if(!cleaned) cleaned = cleanedNoTokens;
-    return normalizeString(cleaned);
+  function copyUrl(url){
+    if(!url) return;
+    if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(url).catch(()=>{});
+    else { const ta=document.createElement('textarea'); ta.value=url; document.body.appendChild(ta); ta.select(); try{ document.execCommand('copy'); }catch(e){} ta.remove(); }
   }
-
-  function parseParts(name){
-    const noExt = (name||'').replace(/\.[^.]+$/,'');
-    if(isImageFile(name)){
-      const rawNorm = removeBracketed(noExt).replace(/[_\-\.\s]+/g,' ').replace(/\s+/g,' ').trim();
-      const base = normalizeString(_removeSeasonEpisodeTokens(rawNorm));
-      return { base, season:null, ep:null, hasSeason:false, hasEp:false, raw:rawNorm };
-    }
-
-    const stripped = stripPrefixes(noExt);
-    const rawNorm = stripped.replace(/[_\-\.\s]+/g,' ').replace(/\s+/g,' ').trim();
-
-    let season = null, ep = null, hasSeason=false, hasEp=false;
-    let m;
-
-    m = rawNorm.match(/[sS][\s._\-:]*0*(\d{1,3})[\s._\-]*[eE][\s._\-:]*0*(\d{1,3})/);
-    if(m){ season = toNum(m[1]); ep = toNum(m[2]); hasSeason=true; hasEp=true; }
-
-    if(!hasSeason || !hasEp){
-      m = rawNorm.match(/[eE][\s._\-:]*0*(\d{1,3})[\s._\-]*[sS][\s._\-:]*0*(\d{1,3})/);
-      if(m){ ep = toNum(m[1]); season = toNum(m[2]); hasSeason=true; hasEp=true; }
-    }
-
-    if(!hasSeason || !hasEp){
-      m = rawNorm.match(/\b(?:season|saison)[\s._\-:]*0*(\d{1,3})[\s,._\-]*\b(?:ep(?:isode)?|e)[\s._\-:]*0*(\d{1,3})/i);
-      if(m){ season = toNum(m[1]); ep = toNum(m[2]); hasSeason=true; hasEp=true; }
-    }
-
-    if(!hasSeason){
-      m = rawNorm.match(/\b[sS][\s._\-:]*0*(\d{1,3})\b/);
-      if(m){ season = toNum(m[1]); hasSeason = true; }
-      else {
-        m = rawNorm.match(/\b(?:season|saison)[\s._\-:]*0*(\d{1,3})\b/i);
-        if(m){ season = toNum(m[1]); hasSeason = true; }
-      }
-    }
-
-    if(!hasEp){
-      m = rawNorm.match(/\b(?:ep(?:isode)?|episode|[eE])[\s._\-:]*0*(\d{1,3})\b/i);
-      if(m){ ep = toNum(m[1] || m[0].replace(/\D/g,'')); hasEp = true; }
-    }
-
-    if(!hasEp && !hasSeason){
-      const singleNum = rawNorm.match(/\b0*(\d{1,3})\b/);
-      if(singleNum){ ep = toNum(singleNum[1]); hasEp = true; season = 1; }
-    }
-
-    if(hasEp && !hasSeason){
-      season = 1;
-    }
-
-    let baseRaw = _removeSeasonEpisodeTokens(rawNorm);
-    baseRaw = baseRaw.replace(/\b(vf|vostfr|vost|fr|sub|dub)\b/gi,'').replace(/\s+/g,' ').trim();
-    if(!baseRaw) baseRaw = rawNorm;
-    const base = normalizeString(baseRaw);
-
-    return {
-      base,
-      season: (season != null) ? toNum(season) : null,
-      ep: (ep != null) ? toNum(ep) : null,
-      hasSeason: !!hasSeason,
-      hasEp: !!hasEp,
-      raw: rawNorm
-    };
-  }
-
-  function intraGroupCompare(a,b){
-    const pa = parseParts(a.name||''), pb = parseParts(b.name||'');
-    const aIsBaseOnly = (!pa.hasEp && pa.ep==null) && (!pa.hasSeason && pa.season==null);
-    const bIsBaseOnly = (!pb.hasEp && pb.ep==null) && (!pb.hasSeason && pb.season==null);
-    if(aIsBaseOnly && !bIsBaseOnly) return 1;
-    if(bIsBaseOnly && !aIsBaseOnly) return -1;
-    const sa = pa.season!=null ? toNum(pa.season) : (pa.hasEp ? 1 : 0);
-    const sb = pb.season!=null ? toNum(pb.season) : (pb.hasEp ? 1 : 0);
-    const ea = pa.ep!=null ? toNum(pa.ep) : (pa.hasSeason ? 0 : 999999);
-    const eb = pb.ep!=null ? toNum(pb.ep) : (pb.hasSeason ? 0 : 999999);
-    if(sa !== sb) return sa - sb;
-    if(ea !== eb) return ea - eb;
-    const lmA = toNum(a.lastModified), lmB = toNum(b.lastModified);
-    if(lmA !== lmB) return lmB - lmA;
-    const aNoExt = (a.name||'').replace(/\.[^.]+$/,'');
-    const bNoExt = (b.name||'').replace(/\.[^.]+$/,'');
-    return collator.compare(aNoExt,bNoExt);
-  }
-
-  function createGroupHeader(f){
-    const head = document.createElement('div'); head.className = 'group-head';
-    const left = document.createElement('div'); left.className = 'group-title';
-    const displayBase = (f.base ? f.base.replace(/\s+/g,' ') : '(sans nom)');
-    left.textContent = displayBase;
-    head.appendChild(left);
-    const rightWrap = document.createElement('div'); rightWrap.style.display='flex'; rightWrap.style.gap='8px'; rightWrap.style.alignItems='center';
-    const right = document.createElement('div'); right.style.fontSize='13px'; right.style.color='#555'; right.style.whiteSpace='nowrap'; right.textContent = f.newest ? ('Dernier upload : ' + new Date(Number(f.newest)).toLocaleString()) : '';
-    rightWrap.appendChild(right);
-    const copyAllBtn = document.createElement('button'); copyAllBtn.className='copy-all-btn'; copyAllBtn.title='Copier tous les Name_epX_sY + Url'; copyAllBtn.innerHTML = 'Copier tout';
-    copyAllBtn.addEventListener('click', (ev) => { ev.stopPropagation(); try{ copyGroup(f.base); } catch(e){} copyAllBtn.classList.add('copied'); setTimeout(()=>copyAllBtn.classList.remove('copied'),1200); });
-    rightWrap.appendChild(copyAllBtn);
-    head.appendChild(rightWrap);
-    return head;
-  }
-
-  function createSeasonHeader(obj){
-    const head = document.createElement('div'); head.className = 'season-head';
-    const left = document.createElement('div'); left.className = 'season-title';
-    left.textContent = obj.seasonLabel || (obj.season === 'base' ? 'Base' : ('Saison ' + obj.season));
-    head.appendChild(left);
-    if(obj.note){
-      const note = document.createElement('div'); note.style.fontSize='12px'; note.style.color='#666'; note.textContent = obj.note;
-      head.appendChild(note);
-    }
-    return head;
-  }
+  window.copyUrl = copyUrl;
 
   function createCardElement(f, createVideo=true){
-    if(f.__groupHeader) return createGroupHeader(f);
-    if(f.__seasonHeader) return createSeasonHeader(f);
     const card = document.createElement('div'); card.className = 'card';
     const isVideo = isVideoFile(f.name||'');
     const isImage = isImageFile(f.name||'');
@@ -315,146 +172,15 @@
   }
 
   function buildOrderedList(files){
-    const groups = new Map();
-    (files||[]).forEach(f=>{
-      try {
-        const p = parseParts(f.name||'');
-        const baseKey = (p && p.base) ? p.base : extractBaseName(f.name||'') || (f.name||'').replace(/\.[^.]+$/,'');
-        if(!groups.has(baseKey)) groups.set(baseKey,[]);
-        groups.get(baseKey).push(f);
-      } catch(e) {
-        const fallback = (f.name||'').replace(/\.[^.]+$/,'');
-        if(!groups.has(fallback)) groups.set(fallback,[]);
-        groups.get(fallback).push(f);
-      }
+    const arr = (files||[]).slice();
+    arr.sort((a,b) => {
+      const la = toNum(a.lastModified), lb = toNum(b.lastModified);
+      if(la !== lb) return lb - la;
+      const aNoExt = (a.name||'').replace(/\.[^.]+$/,'');
+      const bNoExt = (b.name||'').replace(/\.[^.]+$/,'');
+      return collator.compare(aNoExt,bNoExt);
     });
-
-    const groupArr = Array.from(groups.entries()).map(([base,items]) => {
-      const newest = items.reduce((m,it) => Math.max(m,toNum(it.lastModified)),0);
-      return { base, items, newest };
-    });
-
-    groupArr.sort((g1,g2) => {
-      const a = toNum(g2.newest) - toNum(g1.newest);
-      if(a !== 0) return a;
-      return collator.compare(g1.base, g2.base);
-    });
-
-    const out = [];
-    for(const g of groupArr){
-      g.items.sort(intraGroupCompare);
-      const seasonMap = new Map();
-      for(const it of g.items){
-        const p = parseParts(it.name||'');
-        let s;
-        if(p.hasSeason && p.season != null) s = Number(p.season);
-        else if(p.hasEp) s = 1;
-        else s = 'base';
-        const arr = seasonMap.get(s) || [];
-        arr.push(it);
-        seasonMap.set(s, arr);
-      }
-
-      const seasonKeys = Array.from(seasonMap.keys()).sort((a,b) => {
-        if(a === 'base') return 1;
-        if(b === 'base') return -1;
-        return Number(a) - Number(b);
-      });
-
-      out.push({ __groupHeader:true, base:g.base, newest:g.newest });
-
-      for(const sk of seasonKeys){
-        const items = seasonMap.get(sk) || [];
-        const seasonLabel = (sk === 'base') ? 'Base' : String(sk);
-        out.push({ __seasonHeader:true, season: sk, seasonLabel: (sk === 'base' ? 'Base' : ('Saison ' + sk)), note:'' });
-
-        const epBuckets = new Map();
-        for(const it of items){
-          const p = parseParts(it.name||'');
-          let epKey;
-          if(p.hasEp && p.ep != null) epKey = Number(p.ep);
-          else if(p.hasSeason) epKey = 0;
-          else epKey = 'base';
-          const arr = epBuckets.get(epKey) || [];
-          arr.push(it);
-          epBuckets.set(epKey, arr);
-        }
-
-        const epKeys = Array.from(epBuckets.keys()).sort((a,b)=>{
-          if(a === 'base') return 1;
-          if(b === 'base') return -1;
-          if(a === 0 && b !== 0) return -1;
-          if(b === 0 && a !== 0) return 1;
-          return Number(a) - Number(b);
-        });
-
-        for(const ek of epKeys){
-          const arr = epBuckets.get(ek) || [];
-          arr.sort((x,y)=> toNum(y.lastModified) - toNum(x.lastModified));
-          arr.forEach((it, idx) => it.__isNewestForEpisode = (idx === 0));
-          for(const it of arr) out.push(it);
-        }
-      }
-    }
-    return out;
-  }
-
-  function escapeHtml(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-
-  function copyText(text){
-    if(!text) return;
-    if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).catch(()=>{});
-    else{
-      const ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.left='-9999px'; document.body.appendChild(ta);
-      ta.select(); try{ document.execCommand('copy'); }catch(e){} ta.remove();
-    }
-  }
-
-  function insertSoftBreaks(str,maxLen=40){
-    if(!str) return '';
-    return str.replace(/\S+/g, (chunk) => {
-      if(chunk.length <= maxLen) return chunk;
-      let out = '';
-      for(let i=0;i<chunk.length;i+=maxLen){ out += chunk.slice(i,i+maxLen); if(i+maxLen<chunk.length) out += '\u200b'; }
-      return out;
-    });
-  }
-
-  function copyGroup(base){
-    if(!base) return;
-    const files = (window.allFiles||[]).filter(f=>{ try{ return parseParts(f.name||'').base === base } catch(e){ return false } }).filter(f=>f.url);
-    if(!files.length){ copyText(`Aucun fichier trouvé pour: ${base}`); return; }
-    const epMap = new Map(); const baseFiles = [];
-    for(const f of files){
-      const p = parseParts(f.name||'');
-      let season = (p.season != null) ? p.season : (p.hasEp ? 1 : null);
-      let ep = (p.ep != null) ? p.ep : null;
-      if(season === null && ep === null){ baseFiles.push({f,p}); continue; }
-      season = season == null ? 0 : Number(season);
-      ep = ep == null ? 0 : Number(ep);
-      const key = `s${season}e${ep}`;
-      const existing = epMap.get(key);
-      if(!existing) epMap.set(key,{file:f,season,ep});
-      else { if(toNum(f.lastModified) > toNum(existing.file.lastModified)) epMap.set(key,{file:f,season,ep}); }
-    }
-    const sortedKeys = Array.from(epMap.keys()).sort((a,b)=> {
-      const ma = a.match(/^s(\d+)e(\d+)$/), mb = b.match(/^s(\d+)e(\d+)$/);
-      const sa = ma ? Number(ma[1]) : 0, ea = ma ? Number(ma[2]) : 0;
-      const sb = mb ? Number(mb[1]) : 0, eb = mb ? Number(mb[2]) : 0;
-      if(sa !== sb) return sa - sb;
-      return ea - eb;
-    });
-    let out = '';
-    for(const k of sortedKeys){
-      const item = epMap.get(k); if(!item) continue;
-      const labelName = `ep${item.ep}_s${item.season}`;
-      out += `${labelName}\n${item.file.name || '(sans nom)'}\nUrl\n${item.file.url || ''}\n\n`;
-    }
-    if(baseFiles.length){
-      baseFiles.sort((a,b)=> toNum(b.f.lastModified) - toNum(a.f.lastModified));
-      for(const bf of baseFiles){ out += `Name_base\n${bf.f.name || '(sans nom)'}\nUrl\n${bf.f.url || ''}\n\n`; }
-    }
-    copyText(out.trim());
+    return arr;
   }
 
   function renderNextChunk(){
@@ -463,19 +189,19 @@
     if(renderedCount >= source.length) return;
     const frag = document.createDocumentFragment();
     const limit = Math.min(source.length, Math.min(CONFIG.MAX_RENDER, renderedCount + CONFIG.CHUNK_SIZE));
-    let videoCount = 0; const MAX_VIDEOS = 8;
+    let videoCount = 0;
     for(let i = renderedCount; i < limit; i++){
       const f = source[i];
-      if(f.__groupHeader){ frag.appendChild(createCardElement(f,false)); continue; }
       const isVideo = isVideoFile(f.name||'');
-      const createVideo = isVideo ? (videoCount < MAX_VIDEOS) : false;
+      const createVideo = isVideo ? (videoCount < CONFIG.MAX_VIDEOS_RENDER) : false;
       const card = createCardElement(f, createVideo);
       if(isVideo && createVideo) videoCount++;
       frag.appendChild(card);
     }
     renderedCount = limit;
     listEl.appendChild(frag);
-    updateEmpty(); updateSentinel();
+    updateEmpty();
+    updateSentinel();
   }
 
   function updateSentinel(){
@@ -489,27 +215,27 @@
 
   function ensureSentinelObserver(){
     if(sentinelObserver) return;
-    sentinelObserver = new IntersectionObserver(entries => { entries.forEach(e => { if(e.isIntersecting) {
-      if(CONFIG.AUTO_FLUSH_ON_SCROLL) flushSilentCache(CONFIG.FLUSH_BATCH_ON_SCROLL);
-      renderNextChunk();
-    } }); }, { root:null, rootMargin:'600px', threshold:0.01 });
+    sentinelObserver = new IntersectionObserver(entries => { entries.forEach(e => { if(e.isIntersecting) { renderNextChunk(); } }); }, { root:null, rootMargin:'600px', threshold:0.01 });
   }
 
   function updateEmpty(){
     const empty = document.getElementById('emptyMessage');
-    const len = (window.viewFiles && window.viewFiles.length) ? window.viewFiles.filter(x=>!x.__groupHeader).length : buildOrderedList(window.allFiles||[]).filter(x=>!x.__groupHeader).length;
+    const len = (window.viewFiles && window.viewFiles.length) ? window.viewFiles.length : buildOrderedList(window.allFiles||[]).length;
     empty.style.display = (len === 0) ? 'block' : 'none';
   }
 
-  function fullRerender(){ renderedCount = 0; document.getElementById('fileList').innerHTML = ''; renderNextChunk(); }
+  function fullRerender(){
+    renderedCount = 0;
+    document.getElementById('fileList').innerHTML = '';
+    renderNextChunk();
+  }
 
   function applySearchAndRender(){
     const q = (document.getElementById('searchInput').value || '').trim().toLowerCase();
     const ordered = buildOrderedList(window.allFiles || []);
     if(q){
       window.viewFiles = ordered.filter(f => {
-        if(f.__groupHeader) return (f.base||'').toLowerCase().includes(q);
-        return ((f.name||'').toLowerCase().includes(q) || (f.url||'').toLowerCase().includes(q) || (parseParts(f.name||'').base||'').toLowerCase().includes(q));
+        return ((f.name||'').toLowerCase().includes(q) || (f.url||'').toLowerCase().includes(q) || (normalizeString(f.name||'')).toLowerCase().includes(q));
       });
     } else window.viewFiles = [];
     renderedCount = 0; document.getElementById('fileList').innerHTML = ''; renderNextChunk();
@@ -526,6 +252,7 @@
       const normalized = (files||[]).map(f => ({ name:f.name, url:f.url, size:toNum(f.size), lastModified:toNum(f.lastModified), thumbnail:f.thumbnail||null }));
       const seen = new Set(), unique = [];
       for(const it of normalized){ if(!it.url) continue; if(!seen.has(it.url)){ seen.add(it.url); unique.push(it); } }
+      unique.sort((a,b)=> toNum(b.lastModified) - toNum(a.lastModified));
       window.allFiles = unique.slice(0, CONFIG.METADATA_CAP);
       fullRerender();
     }catch(e){}
@@ -534,15 +261,18 @@
   function handleServerMsg(msg){
     if(!msg || !msg.type) return;
     if(msg.type === 'full' && Array.isArray(msg.files)){
-      const arr = msg.files.map(f => ({ name:f.name, url:f.url, size:toNum(f.size), lastModified:toNum(f.lastModified), thumbnail: f.thumbnail || null }));
+      const arr = msg.files.map(f => ({ name:f.name, url:f.url, size:toNum(f.size), lastModified: toNum(f.lastModified), thumbnail: f.thumbnail || null }));
       const seen = new Set(), unique = [];
       for(const it of arr){ if(!it.url) continue; if(!seen.has(it.url)){ seen.add(it.url); unique.push(it); } }
+      unique.sort((a,b)=> toNum(b.lastModified) - toNum(a.lastModified));
       window.allFiles = unique.slice(0, CONFIG.METADATA_CAP);
       fullRerender();
     } else if((msg.type === 'add' || msg.type === 'update') && msg.file){
       const file = { name: msg.file.name, url: msg.file.url, size: toNum(msg.file.size), lastModified: toNum(msg.file.lastModified), thumbnail: msg.file.thumbnail || null };
-      silentLogCache.unshift(file);
-      updateNewIndicator();
+      window.allFiles = (window.allFiles || []).filter(x => x.url !== file.url);
+      window.allFiles.unshift(file);
+      if(window.allFiles.length > CONFIG.METADATA_CAP) window.allFiles.length = CONFIG.METADATA_CAP;
+      fullRerender();
     } else if(msg.type === 'remove'){
       const ident = msg.url || msg.name;
       window.allFiles = (window.allFiles||[]).filter(x => x.url !== ident);
@@ -550,9 +280,11 @@
     } else if(msg.type === 'notify' && Array.isArray(msg.files)){
       for(const f of msg.files){
         const file = { name:f.name, url:f.url, size: toNum(f.size), lastModified: toNum(f.lastModified), thumbnail: f.thumbnail || null };
-        silentLogCache.unshift(file);
+        window.allFiles = (window.allFiles || []).filter(x => x.url !== file.url);
+        window.allFiles.unshift(file);
       }
-      updateNewIndicator();
+      if(window.allFiles.length > CONFIG.METADATA_CAP) window.allFiles.length = CONFIG.METADATA_CAP;
+      fullRerender();
     }
   }
 
@@ -586,73 +318,16 @@
       fetch(CONFIG.FILES_PATH, { cache:'no-store' })
         .then(res => res.ok ? res.json() : Promise.reject('err'))
         .then(files => {
-          const arr = (files||[]).map(f=>({ name:f.name, url:f.url, size:toNum(f.size), lastModified:toNum(f.lastModified), thumbnail:f.thumbnail||null }));
+          const arr = (files||[]).map(f=>({ name:f.name, url:f.url, size:toNum(f.size), lastModified: toNum(f.lastModified), thumbnail:f.thumbnail||null }));
           const seen = new Set(), unique = [];
           for(const it of arr){ if(!it.url) continue; if(!seen.has(it.url)){ seen.add(it.url); unique.push(it); } }
+          unique.sort((a,b)=> toNum(b.lastModified) - toNum(a.lastModified));
           window.allFiles = unique.slice(0, CONFIG.METADATA_CAP);
           fullRerender();
         }).catch(()=>{});
     }, CONFIG.POLL_INTERVAL_MS);
   }
   function stopPolling(){ if(pollTimer){ clearInterval(pollTimer); pollTimer = null; } }
-
-  function copyUrl(url){ if(!url) return; if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(url).catch(()=>{}); else { const ta=document.createElement('textarea'); ta.value=url; document.body.appendChild(ta); ta.select(); try{ document.execCommand('copy'); }catch(e){} ta.remove(); } }
-  window.copyUrl = copyUrl;
-
-  function mergeSilentToAll(count=1){
-    if(!silentLogCache.length) return 0;
-    const items = silentLogCache.splice(0,count);
-    const existingUrls = new Set((window.allFiles||[]).map(x=>x.url));
-    const toAdd = items.filter(it => !existingUrls.has(it.url));
-    if(!toAdd.length) return 0;
-
-    const prevScrollY = window.scrollY || 0;
-    const prevDocH = document.documentElement.scrollHeight || 0;
-
-    window.allFiles = toAdd.concat(window.allFiles).slice(0, CONFIG.METADATA_CAP);
-
-    renderedCount = 0;
-    const listEl = document.getElementById('fileList');
-    listEl.innerHTML = '';
-    renderNextChunk();
-
-    const newDocH = document.documentElement.scrollHeight || 0;
-    const delta = newDocH - prevDocH;
-    window.scrollTo(0, Math.max(0, prevScrollY + delta));
-
-    updateNewIndicator();
-    return toAdd.length;
-  }
-
-  function flushSilentCache(n = CONFIG.FLUSH_BATCH_ON_SCROLL){
-    const flushCount = Math.min(n, silentLogCache.length);
-    if(flushCount <= 0) return 0;
-    return mergeSilentToAll(flushCount);
-  }
-
-  function updateNewIndicator(){
-    const count = silentLogCache.length;
-    const badge = document.getElementById('newIndicator');
-    const showBtn = document.getElementById('showNewBtn');
-    document.getElementById('newCount').textContent = String(count);
-    if(count > 0){ badge.style.display='inline-block'; showBtn.style.display='inline-block'; }
-    else { badge.style.display='none'; showBtn.style.display='none'; }
-  }
-
-  document.getElementById('showNewBtn').addEventListener('click',()=>{
-    const toFlush = Math.min(50, silentLogCache.length);
-    mergeSilentToAll(toFlush);
-    if(silentLogCache.length) updateNewIndicator();
-  });
-
-  setInterval(()=>{
-    if(silentLogCache.length && !document.hidden){
-      if(CONFIG.AUTO_FLUSH_ON_SCROLL){
-        mergeSilentToAll(Math.min(1, silentLogCache.length));
-      }
-      updateNewIndicator();
-    }
-  }, CONFIG.SILENT_FLUSH_INTERVAL_MS);
 
   function connectInitial(){
     loadFiles();
@@ -662,10 +337,8 @@
     window.addEventListener('beforeunload', ()=>{ try{ if(ws) ws.close(); }catch(e){} try{ if(es) es.close(); }catch(e){} stopPolling(); });
   }
 
-  window.flushSilentCache = flushSilentCache;
-
   connectInitial();
 })();
 </script>
 </body>
-  </html>
+</html>
