@@ -10,7 +10,6 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="TF-Stream-7" />
-  <link rel="apple-touch-icon" href="https://res.cloudinary.com/dckwrqrur/image/upload/v1755996395/tf-stream-url/tfstream-text-only_mo4wml.png" />
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display",sans-serif;background:#f9f9fb;color:#111;margin:0}
@@ -32,14 +31,15 @@
     .season-head{grid-column:1/-1;padding:6px 12px;background:rgba(0,0,0,0.02);border-radius:10px;font-weight:700;color:#333;display:flex;justify-content:flex-start;align-items:center;gap:12px}
     .meta{font-size:13px;color:#777}
     .actions{display:flex;gap:8px;flex-wrap:wrap}
+    .prefix-span{cursor:pointer;user-select:all;border-radius:6px;padding:6px 8px;background:#111827;color:#fff;font-weight:700}
+    .prefix-span:active{transform:translateY(1px)}
     button{background:#007aff;border:none;color:#fff;padding:8px 12px;border-radius:10px;cursor:pointer}
     button:hover{background:#0065d0}
     .small-btn{padding:6px 10px;font-size:13px;background:#111827;color:#fff;border-radius:8px;border:none}
     .empty{text-align:center;color:#888;margin-top:40px}
     .copy-all-btn{padding:6px 10px;font-size:13px;background:#111827;color:#fff;border-radius:8px;border:none;cursor:pointer}
     .copy-all-btn.copied{background:#10b981}
-    .prefix-span{cursor:pointer;user-select:all;border-radius:4px;padding:0 2px}
-    .prefix-span.copied{background:#10b981;color:#fff}
+    .badge-new{margin-left:8px}
     #fileList{min-height:120px}
   </style>
 </head>
@@ -51,9 +51,11 @@
       <button id="showNewBtn" class="show-btn" style="display:none">Afficher</button>
     </div>
   </header>
+
   <div class="search-bar">
     <input id="searchInput" type="text" placeholder="Rechercher par nom, épisode, season, URL..." />
   </div>
+
   <div id="fileList" class="container"></div>
   <div id="emptyMessage" class="empty" style="display:none">Aucun fichier trouvé.</div>
 
@@ -103,7 +105,7 @@
   function stripPrefixes(noExt){
     if(!noExt) return '';
     let s = noExt;
-    s = s.replace(/^[0-9]{6,}[_\-]*/,'');
+    s = s.replace(/^[0-9]{6,}[_\-]*/,''); // keep as fallback but we also handle leadingNumeric in parseParts
     s = s.replace(/^[\{\[][^)\}]*[\)\]\}][_-\s]*/,'');
     s = s.replace(/^@[^_\-\s]+[_\-\s]*/g,'').replace(/^[_\-]+@[^_\-\s]+[_\-\s]*/g,'');
     s = s.replace(/[_\-]*@[^_\s\-_]+[_\-]*/g,' ');
@@ -112,49 +114,28 @@
     return s;
   }
 
-  function _removeSeasonEpisodeTokens(raw){
-    if(!raw) return raw;
-    let s = String(raw);
-    const patterns = [
-      /[sS][\s._\-:]*0*(\d{1,3})[\s._\-]*[eE][\s._\-:]*0*(\d{1,3})/g,
-      /[eE][\s._\-:]*0*(\d{1,3})[\s._\-]*[sS][\s._\-:]*0*(\d{1,3})/g,
-      /\b(?:season|saison)[\s._\-:]*0*(\d{1,3})[\s,._\-]*\b(?:ep(?:isode)?|e)[\s._\-:]*0*(\d{1,3})/ig,
-      /\b(?:ep(?:isode)?|episode)[\s._\-:]*0*(\d{1,3})[\s,._\-]*\b(?:season|saison)[\s._\-:]*0*(\d{1,3})/ig,
-      /\b[sS][\s._\-:]*0*(\d{1,3})\b/g,
-      /\b(?:season|saison)[\s._\-:]*0*(\d{1,3})\b/ig,
-      /\b[eE][\s._\-:]*0*(\d{1,3})\b/g,
-      /\b(?:ep(?:isode)?|episode)[\s._\-:]*0*(\d{1,3})\b/ig
-    ];
-    for(const re of patterns){ s = s.replace(re, ' '); }
-    s = s.replace(/[\(\{][^\)\}]*[\]\)\}]/g,' ');
-    s = s.replace(/[_\-\.\s]+/g,' ').trim();
-    return s;
-  }
-
-  function extractBaseName(name){
-    if(!name) return '';
-    const noExt = name.replace(/\.[^.]+$/,'');
-    if(isImageFile(name)){
-      let cleaned = noExt.replace(/[^\p{L}\p{N}_\-\.\s]/gu,'');
-      cleaned = _removeSeasonEpisodeTokens(cleaned);
-      return normalizeString(cleaned);
-    }
-    let stripped = stripPrefixes(noExt);
-    const cleanedNoTokens = _removeSeasonEpisodeTokens(stripped);
-    let cleaned = cleanedNoTokens.replace(/\b(vf|vostfr|vost|fr|sub|dub)\b/gi,'').replace(/\b\d{2,6}\b/g,'').replace(/\s+/g,' ').trim();
-    if(!cleaned) cleaned = cleanedNoTokens;
-    return normalizeString(cleaned);
-  }
-
+  /* parseParts improvements:
+     - remove LONG leading numeric prefix (timestamp/id) BEFORE computing base/numericToken
+     - preserve that prefix in leadingNumeric so we can show clickable copy
+     - numericToken = last number in the remaining string (used as ep indicator)
+  */
   function parseParts(name){
     const noExt = (name||'').replace(/\.[^.]+$/,'');
-    if(isImageFile(name)){
-      const rawNorm = removeBracketed(noExt).replace(/[_\-\.\s]+/g,' ').replace(/\s+/g,' ').trim();
-      const base = normalizeString(_removeSeasonEpisodeTokens(rawNorm));
-      return { base, season:null, ep:null, hasSeason:false, hasEp:false, raw:rawNorm };
+    let rawNorm = removeBracketed(noExt).replace(/[_\-\.\s]+/g,' ').replace(/\s+/g,' ').trim();
+
+    // detect and strip a leading numeric prefix (threshold: 4+ digits). Keep it.
+    let leadingNumeric = null;
+    const mLead = rawNorm.match(/^(\d{4,}|\d{6,})[-_\s]*/);
+    if(mLead){
+      leadingNumeric = mLead[1].replace(/[-_\s]/g,'');
+      rawNorm = rawNorm.replace(new RegExp('^' + mLead[0].replace(/([.*+?^=!:${}()|[\]/\\])/g,'\\$1')), '').trim();
+    } else {
+      // also try simpler: digits followed by dash/underscore (for short IDs), but be conservative (>=4)
+      const m2 = rawNorm.match(/^(\d{4,})[-_\s]+/);
+      if(m2){ leadingNumeric = m2[1]; rawNorm = rawNorm.replace(new RegExp('^' + m2[0].replace(/([.*+?^=!:${}()|[\]/\\])/g,'\\$1')), '').trim(); }
     }
-    const stripped = stripPrefixes(noExt);
-    const rawNorm = stripped.replace(/[_\-\.\s]+/g,' ').replace(/\s+/g,' ').trim();
+
+    // now explicit season/ep detection
     let season = null, ep = null, hasSeason=false, hasEp=false;
     let m;
     m = rawNorm.match(/[sS][\s._\-:]*0*(\d{1,3})[\s._\-]*[eE][\s._\-:]*0*(\d{1,3})/);
@@ -179,22 +160,38 @@
       m = rawNorm.match(/\b(?:ep(?:isode)?|episode|[eE])[\s._\-:]*0*(\d{1,3})\b/i);
       if(m){ ep = toNum(m[1] || m[0].replace(/\D/g,'')); hasEp = true; }
     }
-    if(!hasEp && !hasSeason){
-      const singleNum = rawNorm.match(/\b0*(\d{1,3})\b/);
-      if(singleNum){ ep = toNum(singleNum[1]); hasEp = true; season = 1; }
+
+    // If no explicit season/ep found, capture the LAST numeric token in rawNorm as numericToken
+    let numericToken = null;
+    if(!hasSeason && !hasEp){
+      const nums = Array.from((rawNorm.match(/\d{1,6}/g) || []).map(x => Number(x)));
+      if(nums.length) numericToken = nums[nums.length - 1];
     }
-    if(hasEp && !hasSeason){ season = 1; }
-    let baseRaw = _removeSeasonEpisodeTokens(rawNorm);
+
+    // Build base string removing season/ep tokens & trailing numeric token if it was detected
+    let baseRaw = rawNorm;
+    if(hasSeason || hasEp){
+      baseRaw = baseRaw.replace(/[sS][\s._\-:]*0*(\d{1,3})[\s._\-]*[eE][\s._\-:]*0*(\d{1,3})/g,' ');
+      baseRaw = baseRaw.replace(/[eE][\s._\-:]*0*(\d{1,3})[\s._\-]*[sS][\s._\-:]*0*(\d{1,3})/g,' ');
+      baseRaw = baseRaw.replace(/\b(?:season|saison)[\s._\-:]*0*(\d{1,3})\b/ig,' ');
+      baseRaw = baseRaw.replace(/\b(?:ep(?:isode)?|episode|[eE])[\s._\-:]*0*(\d{1,3})\b/ig,' ');
+    } else if(numericToken != null){
+      // remove the last numeric token only
+      baseRaw = baseRaw.replace(new RegExp('\\b' + String(numericToken) + '\\b' + '\\s*$'), ' ');
+    }
+
     baseRaw = baseRaw.replace(/\b(vf|vostfr|vost|fr|sub|dub)\b/gi,'').replace(/\s+/g,' ').trim();
-    if(!baseRaw) baseRaw = rawNorm;
-    const base = normalizeString(baseRaw);
+    const base = normalizeString(baseRaw || rawNorm);
+
     return {
       base,
       season: (season != null) ? toNum(season) : null,
       ep: (ep != null) ? toNum(ep) : null,
+      numericToken: (numericToken != null) ? Number(numericToken) : null,
+      leadingNumeric: leadingNumeric,
       hasSeason: !!hasSeason,
       hasEp: !!hasEp,
-      raw: baseRaw // raw without season/ep tokens for display building
+      raw: rawNorm
     };
   }
 
@@ -220,7 +217,6 @@
   function createGroupHeader(f){
     const head = document.createElement('div'); head.className = 'group-head';
     const left = document.createElement('div'); left.className = 'group-title';
-    // show pretty base (capitalize words)
     const pretty = (f.base || '(sans nom)').replace(/[_\-\s]+/g,' ').trim();
     left.textContent = pretty;
     head.appendChild(left);
@@ -247,16 +243,20 @@
   }
 
   function niceDisplayName(f){
-    // Build display name like "Name Saison 1 ep 1" when season/ep present.
     const p = parseParts(f.name || '');
     const basePretty = (p.raw || f.name || '').replace(/[_\-\s]+/g,' ').trim();
-    if(p.hasEp || p.hasSeason){
+    if(p.hasSeason || p.hasEp){
       const s = (p.season != null) ? p.season : (p.hasEp ? 1 : null);
       const e = (p.ep != null) ? p.ep : (p.hasEp ? (p.ep || '') : '');
       if(s != null && e != null && e !== '') return `${basePretty} Saison ${s} ep ${e}`;
       if(s != null && (e === '' || e == null)) return `${basePretty} Saison ${s}`;
     }
-    // fallback: show name without extension and bracketed parts removed
+    if(f.__displaySeason != null){
+      const s = f.__displaySeason;
+      const e = f.__displayEp != null ? f.__displayEp : '';
+      if(e !== '') return `${basePretty} Saison ${s} ep ${e}`;
+      return `${basePretty} Saison ${s}`;
+    }
     const rawName = removeBracketed((f.name || '').replace(/\.[^.]+$/,''));
     return rawName || '(sans nom)';
   }
@@ -281,14 +281,26 @@
     }
 
     const info = document.createElement('div'); info.className='info';
-    const nameDiv = document.createElement('div'); nameDiv.className='name';
+    const nameRow = document.createElement('div'); nameRow.style.display='flex'; nameRow.style.alignItems='center'; nameRow.style.gap='8px';
 
-    // Use niceDisplayName to show "Name Saison X ep Y"
-    nameDiv.textContent = niceDisplayName(f);
+    // leading numeric clickable prefix
+    const p = parseParts(f.name || '');
+    if(p.leadingNumeric){
+      const pref = document.createElement('span');
+      pref.className = 'prefix-span';
+      pref.textContent = p.leadingNumeric;
+      pref.title = 'Cliquer pour copier le préfixe';
+      pref.addEventListener('click', (ev)=>{ ev.stopPropagation(); copyText(p.leadingNumeric); pref.style.background='#10b981'; setTimeout(()=>pref.style.background='#111827',900); });
+      nameRow.appendChild(pref);
+    }
+
+    const nameDiv = document.createElement('div'); nameDiv.className = 'name'; nameDiv.textContent = niceDisplayName(f);
+    nameRow.appendChild(nameDiv);
+    info.appendChild(nameRow);
 
     if(f.__isNewestForEpisode){
       const badge = document.createElement('span'); badge.className='badge-new'; badge.textContent='NOUVO'; badge.style.fontSize='11px'; badge.style.padding='4px 8px'; badge.style.marginLeft='8px';
-      nameDiv.appendChild(badge);
+      nameRow.appendChild(badge);
     }
 
     const metaDiv = document.createElement('div'); metaDiv.className='meta'; const sizeMB = ((toNum(f.size)||0)/1048576).toFixed(1); const lm = f.lastModified ? new Date(Number(f.lastModified)).toLocaleString() : '-'; metaDiv.textContent = `${sizeMB} MB • ${lm}`;
@@ -298,12 +310,12 @@
     const openBtn = document.createElement('button'); openBtn.className='small-btn'; openBtn.textContent='Ouvrir'; openA.appendChild(openBtn);
     const urlSpan = document.createElement('div'); urlSpan.className='suburl'; urlSpan.textContent = insertSoftBreaks(f.url || '',50);
     actions.appendChild(copyBtn); actions.appendChild(openA);
-    info.appendChild(nameDiv); info.appendChild(metaDiv); info.appendChild(actions); info.appendChild(urlSpan);
+    info.appendChild(metaDiv); info.appendChild(actions); info.appendChild(urlSpan);
     card.appendChild(preview); card.appendChild(info);
     return card;
   }
 
-  // Build ordered list: images => single item groups; videos/files => grouped by base, seasons then episodes.
+  // buildOrderedList with corrected leading-numeric stripping and grouping logic
   function buildOrderedList(files){
     const groups = new Map();
     (files||[]).forEach(f=>{
@@ -315,7 +327,7 @@
           groups.get(imgKey).push(f);
           return;
         }
-        const baseKey = (p && p.base) ? p.base : extractBaseName(f.name||'') || (f.name||'').replace(/\.[^.]+$/,'');
+        const baseKey = (p && p.base) ? p.base : normalizeString((f.name||'').replace(/\.[^.]+$/,'')) || (f.name||'').replace(/\.[^.]+$/,'');
         if(!groups.has(baseKey)) groups.set(baseKey,[]);
         groups.get(baseKey).push(f);
       } catch(e) {
@@ -330,7 +342,7 @@
       return { base, items, newest };
     });
 
-    // Put most recently updated groups first
+    // most recently updated groups first
     groupArr.sort((g1,g2) => {
       const a = toNum(g2.newest) - toNum(g1.newest);
       if(a !== 0) return a;
@@ -339,47 +351,89 @@
 
     const out = [];
     for(const g of groupArr){
-      // Image single-item groups -> push items directly sorted by lastModified desc
+      // images: push directly
       if(typeof g.base === 'string' && g.base.startsWith('img::')){
         g.items.sort((x,y)=> toNum(y.lastModified) - toNum(x.lastModified));
         for(const it of g.items) out.push(it);
         continue;
       }
 
-      // Non-image groups: build season map and ep buckets
-      g.items.sort(intraGroupCompare);
-      const seasonMap = new Map();
-      for(const it of g.items){
-        const p = parseParts(it.name||'');
-        let s;
-        if(p.hasSeason && p.season != null) s = Number(p.season);
-        else if(p.hasEp) s = 1;
-        else s = 'base';
-        const arr = seasonMap.get(s) || [];
-        arr.push(it);
-        seasonMap.set(s, arr);
+      // parse items
+      const parsed = g.items.map(it => ({ it, p: parseParts(it.name || '') }));
+
+      const explicitSeason = parsed.filter(x => x.p.hasSeason || x.p.hasEp).map(x=>x.it);
+      const numericItems = parsed.filter(x => !(x.p.hasSeason || x.p.hasEp) && x.p.numericToken != null);
+      const baseOnly = parsed.filter(x => !(x.p.hasSeason || x.p.hasEp) && x.p.numericToken == null).map(x=>x.it);
+
+      // group numericItems by numericToken
+      const numMap = new Map();
+      for(const ni of numericItems){
+        const key = String(ni.p.numericToken);
+        if(!numMap.has(key)) numMap.set(key, []);
+        numMap.get(key).push(ni);
       }
 
+      // synthesize season/ep assignments
+      const synthesized = [];
+      for(const [numKey, arr] of numMap.entries()){
+        // sort by lastModified ascending so oldest => season1, next => season2, ...
+        arr.sort((a,b) => toNum(a.it.lastModified) - toNum(b.it.lastModified));
+        if(arr.length === 1){
+          const item = arr[0].it;
+          item.__synth = { season: 1, ep: Number(numKey) };
+          synthesized.push(item);
+        } else {
+          for(let i=0;i<arr.length;i++){
+            const item = arr[i].it;
+            item.__synth = { season: i+1, ep: Number(numKey) };
+            synthesized.push(item);
+          }
+        }
+      }
+
+      // push group header
+      out.push({ __groupHeader:true, base:g.base, newest:g.newest });
+
+      const seasonMap = new Map();
+      function pushToSeason(sKey, item){ const arr = seasonMap.get(sKey) || []; arr.push(item); seasonMap.set(sKey, arr); }
+
+      // explicit season items
+      for(const it of explicitSeason){
+        const p = parseParts(it.name || '');
+        const s = (p.season != null) ? p.season : (p.hasEp ? 1 : 'base');
+        it.__displaySeason = (p.season != null) ? p.season : (p.hasEp ? 1 : null);
+        it.__displayEp = (p.ep != null) ? p.ep : (p.hasEp ? p.ep : null);
+        pushToSeason(s, it);
+      }
+
+      // synthesized numeric items
+      for(const it of synthesized){
+        const s = it.__synth.season != null ? it.__synth.season : 1;
+        it.__displaySeason = s;
+        it.__displayEp = it.__synth.ep;
+        pushToSeason(s, it);
+      }
+
+      // base only
+      for(const it of baseOnly) pushToSeason('base', it);
+
+      // sort seasons
       const seasonKeys = Array.from(seasonMap.keys()).sort((a,b) => {
         if(a === 'base') return 1;
         if(b === 'base') return -1;
         return Number(a) - Number(b);
       });
 
-      // group header (base name + copy button)
-      out.push({ __groupHeader:true, base:g.base, newest:g.newest });
-
       for(const sk of seasonKeys){
         const items = seasonMap.get(sk) || [];
-        // season header
         out.push({ __seasonHeader:true, season: sk, seasonLabel: (sk === 'base' ? 'Base' : ('Saison ' + sk)), note:'' });
 
-        // bucket episodes under this season
         const epBuckets = new Map();
         for(const it of items){
-          const p = parseParts(it.name||'');
+          const p = parseParts(it.name || '');
           let epKey;
           if(p.hasEp && p.ep != null) epKey = Number(p.ep);
+          else if(it.__displayEp != null) epKey = Number(it.__displayEp);
           else if(p.hasSeason) epKey = 0;
           else epKey = 'base';
           const arr = epBuckets.get(epKey) || [];
@@ -403,10 +457,9 @@
         }
       }
     }
+
     return out;
   }
-
-  function escapeHtml(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
   function copyText(text){
     if(!text) return;
@@ -427,27 +480,51 @@
     });
   }
 
-  // copyGroup: format output as requested: "Name Saison X ep Y" / Name Base
   function copyGroup(baseKey){
     if(!baseKey) return;
-    // find files that belong to this base
     const files = (window.allFiles||[]).filter(f=>{
       try{ return parseParts(f.name||'').base === baseKey; } catch(e){ return false; }
     }).filter(f=>f.url);
     if(!files.length){ copyText(`Aucun fichier trouvé pour: ${baseKey}`); return; }
 
-    // organize by season/ep like render
-    const seasonMap = new Map();
-    for(const f of files){
-      const p = parseParts(f.name || '');
-      let s;
-      if(p.hasSeason && p.season != null) s = Number(p.season);
-      else if(p.hasEp) s = 1;
-      else s = 'base';
-      const arr = seasonMap.get(s) || [];
-      arr.push({f,p});
-      seasonMap.set(s, arr);
+    // mirror grouping logic (simplified) to format output
+    const parsed = files.map(f=>({f,p:parseParts(f.name||'')}));
+    const explicitSeason = parsed.filter(x => x.p.hasSeason || x.p.hasEp).map(x=>x.f);
+    const numericItems = parsed.filter(x => !(x.p.hasSeason || x.p.hasEp) && x.p.numericToken != null);
+    const baseOnly = parsed.filter(x => !(x.p.hasSeason || x.p.hasEp) && x.p.numericToken == null).map(x=>x.f);
+
+    const numMap = new Map();
+    for(const ni of numericItems){
+      const key = String(ni.p.numericToken);
+      if(!numMap.has(key)) numMap.set(key, []);
+      numMap.get(key).push(ni);
     }
+
+    const synthesized = [];
+    for(const [numKey, arr] of numMap.entries()){
+      arr.sort((a,b) => toNum(a.f.lastModified) - toNum(b.f.lastModified));
+      if(arr.length === 1){
+        arr[0].f.__synth = { season:1, ep:Number(numKey) };
+        synthesized.push(arr[0].f);
+      } else {
+        for(let i=0;i<arr.length;i++){
+          arr[i].f.__synth = { season:i+1, ep:Number(numKey) };
+          synthesized.push(arr[i].f);
+        }
+      }
+    }
+
+    const seasonMap = new Map();
+    function pushToSeason(sKey, item){ const arr = seasonMap.get(sKey) || []; arr.push(item); seasonMap.set(sKey, arr); }
+    for(const it of explicitSeason){
+      const p = parseParts(it.name||'');
+      const s = (p.season != null) ? p.season : (p.hasEp ? 1 : 'base');
+      it.__displaySeason = (p.season != null) ? p.season : (p.hasEp ? 1 : null);
+      it.__displayEp = (p.ep != null) ? p.ep : (p.hasEp ? p.ep : null);
+      pushToSeason(s, it);
+    }
+    for(const it of synthesized){ const s = it.__synth.season; it.__displaySeason = s; it.__displayEp = it.__synth.ep; pushToSeason(s, it); }
+    for(const it of baseOnly) pushToSeason('base', it);
 
     const seasonKeys = Array.from(seasonMap.keys()).sort((a,b) => {
       if(a === 'base') return 1;
@@ -459,20 +536,20 @@
     const prettyBase = (baseKey || '(sans nom)').replace(/[_\-\s]+/g,' ').trim();
     for(const sk of seasonKeys){
       const arr = seasonMap.get(sk) || [];
-      // sort episodes inside season
       arr.sort((a,b) => {
-        const ea = a.p.ep != null ? Number(a.p.ep) : (a.p.hasSeason ? 0 : 999999);
-        const eb = b.p.ep != null ? Number(b.p.ep) : (b.p.hasSeason ? 0 : 999999);
+        const pa = parseParts(a.name||''), pb = parseParts(b.name||'');
+        const ea = pa.ep != null ? Number(pa.ep) : (a.__displayEp != null ? Number(a.__displayEp) : 999999);
+        const eb = pb.ep != null ? Number(pb.ep) : (b.__displayEp != null ? Number(b.__displayEp) : 999999);
         if(ea !== eb) return ea - eb;
-        return toNum(b.f.lastModified) - toNum(a.f.lastModified);
+        return toNum(b.lastModified) - toNum(a.lastModified);
       });
-      for(const item of arr){
-        const f = item.f; const p = item.p;
+      for(const f of arr){
+        const p = parseParts(f.name||'');
         if(sk === 'base'){
           out += `${prettyBase} Base\n${f.name || '(sans nom)'}\nUrl\n${f.url || ''}\n\n`;
         } else {
-          const sNum = (p.season != null) ? p.season : (p.hasEp ? 1 : '');
-          const eNum = (p.ep != null) ? p.ep : '';
+          const sNum = (f.__displaySeason != null) ? f.__displaySeason : sk;
+          const eNum = (f.__displayEp != null) ? f.__displayEp : (p.ep != null ? p.ep : '');
           out += `${prettyBase} Saison ${sNum} ep ${eNum}\n${f.name || '(sans nom)'}\nUrl\n${f.url || ''}\n\n`;
         }
       }
@@ -554,7 +631,6 @@
     }catch(e){ console.error(e); }
   }
 
-  // UPDATED: when server pushes files (add/update/notify) we add videos IMMEDIATELY (not just silent)
   function handleServerMsg(msg){
     if(!msg || !msg.type) return;
     const normFile = f => ({ name:f.name, url:f.url, size: toNum(f.size), lastModified: toNum(f.lastModified), thumbnail: f.thumbnail || null });
@@ -564,77 +640,46 @@
       const seen = new Set(), unique = [];
       for(const it of arr){ if(!it.url) continue; if(!seen.has(it.url)){ seen.add(it.url); unique.push(it); } }
       window.allFiles = unique.slice(0, CONFIG.METADATA_CAP);
-      fullRerender();
-      return;
+      fullRerender(); return;
     }
 
     if((msg.type === 'add' || msg.type === 'update') && msg.file){
       const file = normFile(msg.file);
-
-      // images: immediate add at head
       if(isImageFile(file.name)){
         window.allFiles = (window.allFiles || []).filter(x => x.url !== file.url);
         window.allFiles.unshift(file);
         if(window.allFiles.length > CONFIG.METADATA_CAP) window.allFiles.length = CONFIG.METADATA_CAP;
-        fullRerender();
-        return;
+        fullRerender(); return;
       }
-
-      // videos/other: IMMEDIATELY add/update so grouping and "NOUVO" works right away
       const existingIdx = (window.allFiles || []).findIndex(x => x.url === file.url);
-      if(existingIdx !== -1){
-        window.allFiles[existingIdx] = file;
-      } else {
-        window.allFiles = [file].concat(window.allFiles || []);
-        if(window.allFiles.length > CONFIG.METADATA_CAP) window.allFiles.length = CONFIG.METADATA_CAP;
-      }
-
-      // dedupe by url
+      if(existingIdx !== -1) window.allFiles[existingIdx] = file; else window.allFiles = [file].concat(window.allFiles || []);
+      // dedupe
       const uniq = []; const seenUrls = new Set();
-      for(const it of window.allFiles){
-        if(!it || !it.url) continue;
-        if(seenUrls.has(it.url)) continue;
-        seenUrls.add(it.url);
-        uniq.push(it);
-      }
+      for(const it of window.allFiles){ if(!it || !it.url) continue; if(seenUrls.has(it.url)) continue; seenUrls.add(it.url); uniq.push(it); }
       window.allFiles = uniq;
-      fullRerender();
-      return;
+      fullRerender(); return;
     }
 
     if(msg.type === 'remove'){
       const ident = msg.url || msg.name;
       window.allFiles = (window.allFiles||[]).filter(x => x.url !== ident);
-      fullRerender();
-      return;
+      fullRerender(); return;
     }
 
     if(msg.type === 'notify' && Array.isArray(msg.files)){
       let anyImmediate = false;
       for(const f of msg.files){
         const file = normFile(f);
-        if(isImageFile(file.name)){
-          window.allFiles = (window.allFiles || []).filter(x => x.url !== file.url);
-          window.allFiles.unshift(file);
-          anyImmediate = true;
-        } else {
-          // handle videos immediately as well
-          const existing = (window.allFiles || []).findIndex(x=>x.url===file.url);
-          if(existing !== -1) window.allFiles[existing] = file;
-          else window.allFiles = [file].concat(window.allFiles || []);
-          anyImmediate = true;
-        }
+        if(isImageFile(file.name)){ window.allFiles = (window.allFiles || []).filter(x => x.url !== file.url); window.allFiles.unshift(file); anyImmediate = true; }
+        else { const existing = (window.allFiles || []).findIndex(x=>x.url===file.url); if(existing !== -1) window.allFiles[existing] = file; else window.allFiles = [file].concat(window.allFiles || []); anyImmediate = true; }
       }
       if(anyImmediate){
         if(window.allFiles.length > CONFIG.METADATA_CAP) window.allFiles.length = CONFIG.METADATA_CAP;
-        // dedupe
         const uniq2=[]; const s2=new Set();
         for(const it of window.allFiles){ if(!it || !it.url) continue; if(s2.has(it.url)) continue; s2.add(it.url); uniq2.push(it); }
         window.allFiles = uniq2;
         fullRerender();
-      } else {
-        updateNewIndicator();
-      }
+      } else updateNewIndicator();
       return;
     }
   }
