@@ -116,6 +116,8 @@
     const patterns = [
       /(?:[_\s-]|^)(?:ep(?:isode)?|episode)[\W_]*0*\d+/i,
       /(?:[_\s-]|^)[eE]0*\d+/i,
+      /(?:[_\s-]|^)[epEp]0*\d+/i,
+      /(?:[_\s-]|^)[EPeP]0*\d+/i,
       /[sS]0*\d+[^\d]*[eE]0*\d+/i,
       /[eE]0*\d+[^\d]*[sS]0*\d+/i,
       /(?:[_\s-]|^)(?:saison|season)[\W_]*0*\d+/i,
