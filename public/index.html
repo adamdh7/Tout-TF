@@ -29,7 +29,6 @@
     .name{font-weight:600;font-size:15px;word-break:break-word;white-space:normal}
     .suburl{font-size:11px;color:#888;word-break:anywhere}
     .group-head{grid-column:1/-1;padding:8px 12px;background:rgba(0,0,0,0.03);border-radius:12px;font-weight:700;color:#222;display:flex;justify-content:space-between;align-items:center;gap:12px}
-    .season-head{grid-column:1/-1;padding:6px 12px;background:rgba(0,0,0,0.02);border-radius:10px;font-weight:700;color:#333;display:flex;justify-content:flex-start;align-items:center;gap:12px}
     .meta{font-size:13px;color:#777}
     .actions{display:flex;gap:8px;flex-wrap:wrap}
     button{background:#007aff;border:none;color:#fff;padding:8px 12px;border-radius:10px;cursor:pointer}
@@ -41,6 +40,7 @@
     .prefix-span{cursor:pointer;user-select:all;border-radius:4px;padding:0 2px}
     .prefix-span.copied{background:#10b981;color:#fff}
     #fileList{min-height:120px}
+    .season-head{grid-column:1/-1;padding:6px 12px;background:rgba(0,0,0,0.02);border-radius:10px;font-weight:700;color:#333;display:flex;justify-content:flex-start;align-items:center;gap:12px}
   </style>
 </head>
 <body>
@@ -51,9 +51,11 @@
       <button id="showNewBtn" class="show-btn" style="display:none">Afficher</button>
     </div>
   </header>
+
   <div class="search-bar">
     <input id="searchInput" type="text" placeholder="Rechercher par nom, épisode, season, URL..." />
   </div>
+
   <div id="fileList" class="container"></div>
   <div id="emptyMessage" class="empty" style="display:none">Aucun fichier trouvé.</div>
 
@@ -96,43 +98,66 @@
 
   function removeBracketed(s){
     if(!s) return s;
-    return s.replace(/[\[\(\{][^\]\)\}]*[\]\)\}]/g,'').replace(/\s+/g,' ').trim();
+    return s.replace(/[\(\[\{][^\)\]\}]*[\)\]\}]/g,'').replace(/\s+/g,' ').trim();
   }
 
   function stripPrefixes(noExt){
     if(!noExt) return '';
     let s = noExt;
-    s = s.replace(/^[0-9]{6,}[_\-]*/,''); // long numeric prefixes
-    s = s.replace(/^[\(\{\[][^)\]\}]*[\)\]\}][_-\s]*/,''); // leading bracketed
-    s = s.replace(/^@[^_\-\s]+[_\-\s]*/g,'').replace(/^[_\-]+@[^_\-\s]+[_\-\s]*/g,''); // @user prefixes
+    s = s.replace(/^[0-9]{6,}[_\-]*/,'');
+    s = s.replace(/^[\(\{\[][^)\]\}]*[\)\]\}][_-\s]*/,'');
+    s = s.replace(/^@[^_\-\s]+[_\-\s]*/g,'').replace(/^[_\-]+@[^_\-\s]+[_\-\s]*/g,'');
     s = s.replace(/[_\-]*@[^_\s\-_]+[_\-]*/g,' ');
     s = s.replace(/[_\-\.\s]+/g,' ');
     s = s.replace(/\s+/g,' ').trim();
     return s;
   }
 
-  // ---- Robust season/episode token remover used to compute base names ----
+  // robust token remover used to compute base names (removes season/ep tokens)
   function _removeSeasonEpisodeTokens(raw){
     if(!raw) return raw;
     let s = String(raw);
 
     const patterns = [
-      /[sS][\s._\-:]*0*(\d{1,3})[\s._\-]*[eE][\s._\-:]*0*(\d{1,3})/g, // S01E02 / S 01 E 02 / S-01_E-02
+      /[sS][\s._\-:]*0*(\d{1,3})[\s._\-]*[eE][\s._\-:]*0*(\d{1,3})/g, // S01E02 / S 01 E 02
       /[eE][\s._\-:]*0*(\d{1,3})[\s._\-]*[sS][\s._\-:]*0*(\d{1,3})/g, // E02S01
-      /\b(?:season|saison)[\s._\-:]*0*(\d{1,3})[\s,._\-]*\b(?:ep(?:isode)?|e)[\s._\-:]*0*(\d{1,3})/ig, // season 01 episode 02
-      /\b(?:ep(?:isode)?|episode)[\s._\-:]*0*(\d{1,3})[\s,._\-]*\b(?:season|saison)[\s._\-:]*0*(\d{1,3})/ig, // episode 02 season 01
+      /\b(?:season|saison)[\s._\-:]*0*(\d{1,3})[\s,._\-]*\b(?:ep(?:isode)?|e)[\s._\-:]*0*(\d{1,3})/ig, // season 1 episode 2
+      /\b(?:ep(?:isode)?|episode)[\s._\-:]*0*(\d{1,3})[\s,._\-]*\b(?:season|saison)[\s._\-:]*0*(\d{1,3})/ig,
       /\b[sS][\s._\-:]*0*(\d{1,3})\b/g, // S01 or s 1
-      /\b(?:season|saison)[\s._\-:]*0*(\d{1,3})\b/ig, // season 1
-      /\b[eE][\s._\-:]*0*(\d{1,3})\b/g, // E02
-      /\b(?:ep(?:isode)?|episode)[\s._\-:]*0*(\d{1,3})\b/ig // ep02
+      /\b(?:season|saison)[\s._\-:]*0*(\d{1,3})\b/ig,
+      /\b[eE][\s._\-:]*0*(\d{1,3})\b/g,
+      /\b(?:ep(?:isode)?|episode)[\s._\-:]*0*(\d{1,3})\b/ig
     ];
 
-    for(const re of patterns){
-      s = s.replace(re, ' ');
-    }
+    for(const re of patterns) s = s.replace(re, ' ');
     s = s.replace(/[\[\(\{][^\]\)\}]*[\]\)\}]/g,' ');
     s = s.replace(/[_\-\.\s]+/g,' ').trim();
     return s;
+  }
+
+  function firstTokenIndex(noExt) {
+    if(!noExt) return -1;
+    const patterns = [
+      /\b[sS]0*\d+[^\d]*[eE]0*\d+\b/i,
+      /\b[eE]0*\d+[^\d]*[sS]0*\d+\b/i,
+      /\b(?:saison|season|s)\b[\W_]*0*\d+/i,
+      /\b(?:ep(?:isode)?|e)\b[\W_]*0*\d+/i,
+      /\b(\d{1,3})\b/
+    ];
+
+    const name = noExt.replace(/[\u2010-\u2015–—_.\-]+/g, ' ').toLowerCase();
+
+    let minPos = -1;
+    for (const re of patterns) {
+      const match = name.match(re);
+      if (match) {
+        const pos = name.indexOf(match[0]);
+        if (pos >= 0) {
+          if (minPos === -1 || pos < minPos) minPos = pos;
+        }
+      }
+    }
+    return minPos;
   }
 
   function extractBaseName(name){
@@ -140,29 +165,30 @@
     const noExt = name.replace(/\.[^.]+$/,'');
     if(isImageFile(name)){
       let cleaned = noExt.replace(/[^\p{L}\p{N}_\-\.\s]/gu,'');
-      cleaned = _removeSeasonEpisodeTokens(cleaned);
+      cleaned = removeBracketed(cleaned);
+      cleaned = cleaned.replace(/[_\-\.\s]+/g,' ').trim();
       return normalizeString(cleaned);
     }
-    let stripped = stripPrefixes(noExt);
-    const cleanedNoTokens = _removeSeasonEpisodeTokens(stripped);
-    let cleaned = cleanedNoTokens.replace(/\b(vf|vostfr|vost|fr|sub|dub)\b/gi,'').replace(/\b\d{2,6}\b/g,'').replace(/\s+/g,' ').trim();
-    if(!cleaned) cleaned = cleanedNoTokens;
+    const stripped = stripPrefixes(noExt);
+    const withoutTokens = _removeSeasonEpisodeTokens(stripped);
+    const pos = firstTokenIndex(withoutTokens);
+    const baseRaw = pos >= 0 ? withoutTokens.slice(0,pos) : withoutTokens;
+    let cleaned = baseRaw.replace(/\b(vf|vostfr|vost|fr|sub|dub)\b/gi,'').replace(/\b\d{1,4}\b/g,'').replace(/[_\-\.\s]+/g,' ').trim();
+    if(!cleaned) cleaned = baseRaw;
+    cleaned = removeBracketed(cleaned);
     return normalizeString(cleaned);
   }
 
-  // ---- parseParts: finds base, season, episode robustly ----
   function parseParts(name){
     const noExt = (name||'').replace(/\.[^.]+$/,'');
     if(isImageFile(name)){
       const rawNorm = removeBracketed(noExt).replace(/[_\-\.\s]+/g,' ').replace(/\s+/g,' ').trim();
-      const base = normalizeString(_removeSeasonEpisodeTokens(rawNorm));
+      const base = normalizeString(rawNorm);
       return { base, season:null, ep:null, hasSeason:false, hasEp:false, raw:rawNorm };
     }
-
     const stripped = stripPrefixes(noExt);
     const rawNorm = stripped.replace(/[_\-\.\s]+/g,' ').replace(/\s+/g,' ').trim();
-
-    let season = null, ep = null, hasSeason=false, hasEp=false;
+    let season=null, ep=null, hasSeason=false, hasEp=false;
     let m;
 
     // 1) SxxEyy
@@ -205,26 +231,18 @@
 
     // assume season 1 if ep found without explicit season
     if(hasEp && !hasSeason){
-      // mark season assumed (we keep season numeric)
       season = 1;
     }
 
     let baseRaw = _removeSeasonEpisodeTokens(rawNorm);
     baseRaw = baseRaw.replace(/\b(vf|vostfr|vost|fr|sub|dub)\b/gi,'').replace(/\s+/g,' ').trim();
     if(!baseRaw) baseRaw = rawNorm;
+    baseRaw = removeBracketed(baseRaw);
     const base = normalizeString(baseRaw);
 
-    return {
-      base,
-      season: (season != null) ? toNum(season) : null,
-      ep: (ep != null) ? toNum(ep) : null,
-      hasSeason: !!hasSeason,
-      hasEp: !!hasEp,
-      raw: rawNorm
-    };
+    return { base, season, ep, hasSeason, hasEp, raw:rawNorm };
   }
 
-  // --- ordering inside a group: by season asc, ep asc, then latest modified
   function intraGroupCompare(a,b){
     const pa = parseParts(a.name||''), pb = parseParts(b.name||'');
     const aIsBaseOnly = (!pa.hasEp && pa.ep==null) && (!pa.hasSeason && pa.season==null);
@@ -244,182 +262,61 @@
     return collator.compare(aNoExt,bNoExt);
   }
 
-  // create group (series) header
-  function createGroupHeader(f){
-    const head = document.createElement('div'); head.className = 'group-head';
-    const left = document.createElement('div'); left.className = 'group-title';
-    const displayBase = (f.base ? f.base.replace(/\s+/g,' ') : '(sans nom)');
-    left.textContent = displayBase;
-    head.appendChild(left);
-    const rightWrap = document.createElement('div'); rightWrap.style.display='flex'; rightWrap.style.gap='8px'; rightWrap.style.alignItems='center';
-    const right = document.createElement('div'); right.style.fontSize='13px'; right.style.color='#555'; right.style.whiteSpace='nowrap'; right.textContent = f.newest ? ('Dernier upload : ' + new Date(Number(f.newest)).toLocaleString()) : '';
-    rightWrap.appendChild(right);
-    const copyAllBtn = document.createElement('button'); copyAllBtn.className='copy-all-btn'; copyAllBtn.title='Copier tous les Name_epX_sY + Url'; copyAllBtn.innerHTML = 'Copier tout';
-    copyAllBtn.addEventListener('click', (ev) => { ev.stopPropagation(); try{ copyGroup(f.base); } catch(e){} copyAllBtn.classList.add('copied'); setTimeout(()=>copyAllBtn.classList.remove('copied'),1200); });
-    rightWrap.appendChild(copyAllBtn);
-    head.appendChild(rightWrap);
-    return head;
-  }
-
-  // create season header
-  function createSeasonHeader(obj){
-    const head = document.createElement('div'); head.className = 'season-head';
-    const left = document.createElement('div'); left.className = 'season-title';
-    left.textContent = obj.seasonLabel || (obj.season === 'base' ? 'Base' : ('Saison ' + obj.season));
-    head.appendChild(left);
-    if(obj.note){
-      const note = document.createElement('div'); note.style.fontSize='12px'; note.style.color='#666'; note.textContent = obj.note;
-      head.appendChild(note);
-    }
-    return head;
-  }
-
-  // create a single card or header
-  function createCardElement(f, createVideo=true){
-    if(f.__groupHeader) return createGroupHeader(f);
-    if(f.__seasonHeader) return createSeasonHeader(f);
-    const card = document.createElement('div'); card.className = 'card';
-    const isVideo = isVideoFile(f.name||'');
-    const isImage = isImageFile(f.name||'');
-    let preview;
-    if(isVideo && createVideo){
-      const vid = document.createElement('video'); vid.className='thumb'; vid.src = f.url; vid.controls = true; vid.preload='metadata'; preview = vid;
-    } else if(isImage){
-      const img = document.createElement('img'); img.className='thumb'; img.alt = f.name||''; img.src = f.url; preview = img;
-    } else if(isVideo && !createVideo){
-      const div = document.createElement('div'); div.className='thumb'; div.style.display='flex'; div.style.alignItems='center'; div.style.justifyContent='center'; div.style.cursor='pointer'; div.textContent='Cliquer pour lire';
-      div.addEventListener('click', ()=>{ const vid=document.createElement('video'); vid.className='thumb'; vid.src=f.url; vid.controls=true; vid.preload='metadata'; div.replaceWith(vid); }, { once:true });
-      preview = div;
-    } else {
-      const div = document.createElement('div'); div.className='thumb'; div.style.display='flex'; div.style.alignItems='center'; div.style.justifyContent='center'; div.style.color='#999'; div.textContent='Pas d’aperçu'; preview = div;
-    }
-
-    const info = document.createElement('div'); info.className='info';
-    const nameDiv = document.createElement('div'); nameDiv.className='name';
-    const rawName = f.name || '(sans nom)';
-    const displayRaw = removeBracketed(rawName.replace(/\.[^.]+$/,''));
-    const leadingMatch = rawName.match(/^(\d+)/);
-    if(leadingMatch){
-      const digits = leadingMatch[1];
-      const rest = rawName.slice(digits.length);
-      const restDisplay = removeBracketed(rest.replace(/\.[^.]+$/,'')).trim();
-      const prefixSpan = document.createElement('span'); prefixSpan.className='prefix-span'; prefixSpan.textContent = insertSoftBreaks(digits,40);
-      prefixSpan.title = 'Cliquer pour copier le nombre';
-      prefixSpan.addEventListener('click', (ev)=>{ ev.stopPropagation(); copyText(digits); prefixSpan.classList.add('copied'); setTimeout(()=>prefixSpan.classList.remove('copied'),1200); });
-      const restSpan = document.createElement('span'); restSpan.textContent = insertSoftBreaks(restDisplay || rest,40); restSpan.style.whiteSpace='pre-wrap';
-      nameDiv.appendChild(prefixSpan); nameDiv.appendChild(restSpan);
-    } else {
-      nameDiv.textContent = insertSoftBreaks(displayRaw,40);
-    }
-
-    if(f.__isNewestForEpisode){
-      const badge = document.createElement('span'); badge.className='badge-new'; badge.textContent='NOUVO'; badge.style.fontSize='11px'; badge.style.padding='4px 8px'; badge.style.marginLeft='8px';
-      nameDiv.appendChild(badge);
-    }
-
-    const metaDiv = document.createElement('div'); metaDiv.className='meta'; const sizeMB = ((toNum(f.size)||0)/1048576).toFixed(1); const lm = f.lastModified ? new Date(Number(f.lastModified)).toLocaleString() : '-'; metaDiv.textContent = `${sizeMB} MB • ${lm}`;
-    const actions = document.createElement('div'); actions.className='actions';
-    const copyBtn = document.createElement('button'); copyBtn.className='small-btn'; copyBtn.textContent='Copier URL'; copyBtn.addEventListener('click', ()=>copyUrl(f.url));
-    const openA = document.createElement('a'); openA.href = f.url; openA.target = '_blank';
-    const openBtn = document.createElement('button'); openBtn.className='small-btn'; openBtn.textContent='Ouvrir'; openA.appendChild(openBtn);
-    const urlSpan = document.createElement('div'); urlSpan.className='suburl'; urlSpan.textContent = insertSoftBreaks(f.url || '',50);
-    actions.appendChild(copyBtn); actions.appendChild(openA);
-    info.appendChild(nameDiv); info.appendChild(metaDiv); info.appendChild(actions); info.appendChild(urlSpan);
-    card.appendChild(preview); card.appendChild(info);
-    return card;
-  }
-
-  // --- buildOrderedList: groups -> seasons -> episodes (mark newest per episode per season)
   function buildOrderedList(files){
     const groups = new Map();
     (files||[]).forEach(f=>{
-      try {
-        const p = parseParts(f.name||'');
-        const baseKey = (p && p.base) ? p.base : extractBaseName(f.name||'') || (f.name||'').replace(/\.[^.]+$/,'');
-        if(!groups.has(baseKey)) groups.set(baseKey,[]);
-        groups.get(baseKey).push(f);
-      } catch(e) {
-        const fallback = (f.name||'').replace(/\.[^.]+$/,'');
-        if(!groups.has(fallback)) groups.set(fallback,[]);
-        groups.get(fallback).push(f);
-      }
+      const base = extractBaseName(f.name||'') || (f.name||'').replace(/\.[^.]+$/,'');
+      if(!groups.has(base)) groups.set(base,[]);
+      groups.get(base).push(f);
     });
-
     const groupArr = Array.from(groups.entries()).map(([base,items]) => {
       const newest = items.reduce((m,it) => Math.max(m,toNum(it.lastModified)),0);
       return { base, items, newest };
     });
-
-    // sort series groups by newest upload (desc)
-    groupArr.sort((g1,g2) => {
-      const a = toNum(g2.newest) - toNum(g1.newest);
-      if(a !== 0) return a;
-      return collator.compare(g1.base, g2.base);
-    });
-
+    groupArr.sort((g1,g2) => toNum(g2.newest) - toNum(g1.newest));
     const out = [];
     for(const g of groupArr){
-      // sort each group's items sensibly first
       g.items.sort(intraGroupCompare);
-
-      // build season map: key = season number or 'base'
-      const seasonMap = new Map();
-      for(const it of g.items){
+      const itemsByTime = g.items.slice().sort((a,b) => toNum(a.lastModified) - toNum(b.lastModified));
+      const assigned = new Map();
+      let maxSeason = 0;
+      const assignedSeasons = new Set();
+      for(const it of itemsByTime){
         const p = parseParts(it.name||'');
-        let s;
-        if(p.hasSeason && p.season != null) s = Number(p.season);
-        else if(p.hasEp) s = 1; // ep without explicit season -> assume season 1
-        else s = 'base';
-        const arr = seasonMap.get(s) || [];
-        arr.push(it);
-        seasonMap.set(s, arr);
+        if(p.hasSeason && p.season!=null){ const s = Number(p.season); assignedSeasons.add(s); if(s>maxSeason) maxSeason = s; }
       }
-
-      // sort season keys: numeric asc, 'base' last
-      const seasonKeys = Array.from(seasonMap.keys()).sort((a,b) => {
-        if(a === 'base') return 1;
-        if(b === 'base') return -1;
-        return Number(a) - Number(b);
-      });
-
+      for(const it of itemsByTime){
+        const p = parseParts(it.name||'');
+        if(p.hasSeason){
+          const as = p.season!=null ? Number(p.season) : null;
+          const ae = p.ep!=null ? Number(p.ep) : (p.hasSeason ? 0 : null);
+          assigned.set(it,{season:as,ep:ae});
+          if(as!=null){ assignedSeasons.add(as); if(as>maxSeason) maxSeason = as; }
+        } else if(p.hasEp){
+          if(p.ep === 1){
+            if(!assignedSeasons.has(1)){ assigned.set(it,{season:1,ep:1}); assignedSeasons.add(1); if(1>maxSeason) maxSeason=1; }
+            else { const ns = maxSeason + 1; assigned.set(it,{season:ns,ep:1}); assignedSeasons.add(ns); maxSeason = ns; }
+          } else {
+            assigned.set(it,{season:1,ep:Number(p.ep)}); assignedSeasons.add(1); if(1>maxSeason) maxSeason=1;
+          }
+        } else assigned.set(it,{season:'base',ep:'base'});
+      }
+      const mapEp = new Map();
+      for(const it of g.items){
+        const a = assigned.get(it) || {season:'base',ep:'base'};
+        const s = (a.season === 'base') ? 'base' : Number(a.season);
+        const e = (a.ep === 'base') ? 'base' : Number(a.ep);
+        const key = (s === 'base') ? 'base' : `s${s}e${e}`;
+        if(!mapEp.has(key)) mapEp.set(key,[]);
+        mapEp.get(key).push(it);
+      }
+      for(const [k,arr] of mapEp.entries()){
+        arr.sort((x,y) => toNum(y.lastModified) - toNum(x.lastModified));
+        if(arr.length) arr[0].__isNewestForEpisode = true;
+        for(let i=1;i<arr.length;i++) arr[i].__isNewestForEpisode = false;
+      }
       out.push({ __groupHeader:true, base:g.base, newest:g.newest });
-
-      // for each season, push season header then episodes
-      for(const sk of seasonKeys){
-        const items = seasonMap.get(sk) || [];
-        const seasonLabel = (sk === 'base') ? 'Base' : String(sk);
-        out.push({ __seasonHeader:true, season: sk, seasonLabel: (sk === 'base' ? 'Base' : ('Saison ' + sk)), note:'' });
-
-        // bucket by episode number
-        const epBuckets = new Map();
-        for(const it of items){
-          const p = parseParts(it.name||'');
-          let epKey;
-          if(p.hasEp && p.ep != null) epKey = Number(p.ep);
-          else if(p.hasSeason) epKey = 0; // season-only item
-          else epKey = 'base';
-          const arr = epBuckets.get(epKey) || [];
-          arr.push(it);
-          epBuckets.set(epKey, arr);
-        }
-
-        // sort episode keys: numeric asc, 0 before base, base last
-        const epKeys = Array.from(epBuckets.keys()).sort((a,b)=>{
-          if(a === 'base') return 1;
-          if(b === 'base') return -1;
-          if(a === 0 && b !== 0) return -1;
-          if(b === 0 && a !== 0) return 1;
-          return Number(a) - Number(b);
-        });
-
-        // mark newest and push items
-        for(const ek of epKeys){
-          const arr = epBuckets.get(ek) || [];
-          arr.sort((x,y)=> toNum(y.lastModified) - toNum(x.lastModified));
-          arr.forEach((it, idx) => it.__isNewestForEpisode = (idx === 0));
-          for(const it of arr) out.push(it);
-        }
-      }
+      for(const it of g.items) out.push(it);
     }
     return out;
   }
@@ -447,7 +344,7 @@
 
   function copyGroup(base){
     if(!base) return;
-    const files = (window.allFiles||[]).filter(f=>{ try{ return parseParts(f.name||'').base === base } catch(e){ return false } }).filter(f=>f.url);
+    const files = (window.allFiles||[]).filter(f=>{ try{ return extractBaseName(f.name||'') === base } catch(e){ return false } }).filter(f=>f.url);
     if(!files.length){ copyText(`Aucun fichier trouvé pour: ${base}`); return; }
     const epMap = new Map(); const baseFiles = [];
     for(const f of files){
@@ -480,6 +377,79 @@
       for(const bf of baseFiles){ out += `Name_base\n${bf.f.name || '(sans nom)'}\nUrl\n${bf.f.url || ''}\n\n`; }
     }
     copyText(out.trim());
+  }
+
+  function createGroupHeader(f){
+    const head = document.createElement('div'); head.className = 'group-head';
+    const left = document.createElement('div'); left.className = 'group-title';
+    const displayBase = (f.base ? f.base.replace(/\s+/g,' ') : '(sans nom)');
+    left.textContent = insertSoftBreaks(removeBracketed(displayBase),40);
+    head.appendChild(left);
+    const rightWrap = document.createElement('div'); rightWrap.style.display='flex'; rightWrap.style.gap='8px'; rightWrap.style.alignItems='center';
+    const right = document.createElement('div'); right.style.fontSize='13px'; right.style.color='#555'; right.style.whiteSpace='nowrap'; right.textContent = f.newest ? ('Dernier upload : ' + new Date(Number(f.newest)).toLocaleString()) : '';
+    rightWrap.appendChild(right);
+    const copyAllBtn = document.createElement('button'); copyAllBtn.className='copy-all-btn'; copyAllBtn.title='Copier tous les Name_epX_sY + Url'; copyAllBtn.innerHTML = 'Copier tout';
+    copyAllBtn.addEventListener('click', (ev) => { ev.stopPropagation(); try{ copyGroup(f.base); } catch(e){} copyAllBtn.classList.add('copied'); setTimeout(()=>copyAllBtn.classList.remove('copied'),1200); });
+    rightWrap.appendChild(copyAllBtn);
+    head.appendChild(rightWrap);
+    return head;
+  }
+
+  function createCardElement(f, createVideo=true){
+    if(f.__groupHeader){
+      return createGroupHeader(f);
+    }
+    if(f.__seasonHeader){
+      const head = document.createElement('div'); head.className='season-head';
+      head.textContent = f.seasonLabel || (f.season === 'base' ? 'Base' : ('Saison ' + f.season));
+      return head;
+    }
+    const card = document.createElement('div'); card.className = 'card';
+    const isVideo = isVideoFile(f.name||'');
+    const isImage = isImageFile(f.name||'');
+    let preview;
+    if(isVideo && createVideo){
+      const vid = document.createElement('video'); vid.className='thumb'; vid.src = f.url; vid.controls = true; vid.preload='metadata'; preview = vid;
+    } else if(isImage){
+      const img = document.createElement('img'); img.className='thumb'; img.alt = f.name||''; img.src = f.url; preview = img;
+    } else if(isVideo && !createVideo){
+      const div = document.createElement('div'); div.className='thumb'; div.style.display='flex'; div.style.alignItems='center'; div.style.justifyContent='center'; div.style.cursor='pointer'; div.textContent='Cliquer pour lire';
+      div.addEventListener('click', ()=>{ const vid=document.createElement('video'); vid.className='thumb'; vid.src=f.url; vid.controls=true; vid.preload='metadata'; div.replaceWith(vid); }, { once:true });
+      preview = div;
+    } else {
+      const div = document.createElement('div'); div.className='thumb'; div.style.display='flex'; div.style.alignItems='center'; div.style.justifyContent='center'; div.style.color='#999'; div.textContent='Pas d’aperçu'; preview = div;
+    }
+    const info = document.createElement('div'); info.className='info';
+    const nameDiv = document.createElement('div'); nameDiv.className='name';
+    const rawName = f.name || '(sans nom)';
+    const displayRaw = removeBracketed(rawName.replace(/\.[^.]+$/,''));
+    const leadingMatch = rawName.match(/^(\d+)/);
+    if(leadingMatch){
+      const digits = leadingMatch[1];
+      const rest = rawName.slice(digits.length);
+      const restDisplay = removeBracketed(rest.replace(/\.[^.]+$/,'')).trim();
+      const prefixSpan = document.createElement('span'); prefixSpan.className='prefix-span'; prefixSpan.textContent = insertSoftBreaks(digits,40);
+      prefixSpan.title = 'Cliquer pour copier le nombre';
+      prefixSpan.addEventListener('click', (ev)=>{ ev.stopPropagation(); copyText(digits); prefixSpan.classList.add('copied'); setTimeout(()=>prefixSpan.classList.remove('copied'),1200); });
+      const restSpan = document.createElement('span'); restSpan.textContent = insertSoftBreaks(restDisplay || rest,40); restSpan.style.whiteSpace='pre-wrap';
+      nameDiv.appendChild(prefixSpan); nameDiv.appendChild(restSpan);
+    } else {
+      nameDiv.textContent = insertSoftBreaks(displayRaw,40);
+    }
+    if(f.__isNewestForEpisode){
+      const badge = document.createElement('span'); badge.className='badge-new'; badge.textContent='NOUVO'; badge.style.fontSize='11px'; badge.style.padding='4px 8px'; badge.style.marginLeft='8px';
+      nameDiv.appendChild(badge);
+    }
+    const metaDiv = document.createElement('div'); metaDiv.className='meta'; const sizeMB = ((toNum(f.size)||0)/1048576).toFixed(1); const lm = f.lastModified ? new Date(Number(f.lastModified)).toLocaleString() : '-'; metaDiv.textContent = `${sizeMB} MB • ${lm}`;
+    const actions = document.createElement('div'); actions.className='actions';
+    const copyBtn = document.createElement('button'); copyBtn.className='small-btn'; copyBtn.textContent='Copier URL'; copyBtn.addEventListener('click', ()=>copyUrl(f.url));
+    const openA = document.createElement('a'); openA.href = f.url; openA.target = '_blank';
+    const openBtn = document.createElement('button'); openBtn.className='small-btn'; openBtn.textContent='Ouvrir'; openA.appendChild(openBtn);
+    const urlSpan = document.createElement('div'); urlSpan.className='suburl'; urlSpan.textContent = insertSoftBreaks(f.url || '',50);
+    actions.appendChild(copyBtn); actions.appendChild(openA);
+    info.appendChild(nameDiv); info.appendChild(metaDiv); info.appendChild(actions); info.appendChild(urlSpan);
+    card.appendChild(preview); card.appendChild(info);
+    return card;
   }
 
   function renderNextChunk(){
@@ -534,7 +504,7 @@
     if(q){
       window.viewFiles = ordered.filter(f => {
         if(f.__groupHeader) return (f.base||'').toLowerCase().includes(q);
-        return ((f.name||'').toLowerCase().includes(q) || (f.url||'').toLowerCase().includes(q) || (parseParts(f.name||'').base||'').toLowerCase().includes(q));
+        return ((f.name||'').toLowerCase().includes(q) || (f.url||'').toLowerCase().includes(q) || (extractBaseName(f.name||'').toLowerCase().includes(q)));
       });
     } else window.viewFiles = [];
     renderedCount = 0; document.getElementById('fileList').innerHTML = ''; renderNextChunk();
@@ -559,7 +529,7 @@
   function handleServerMsg(msg){
     if(!msg || !msg.type) return;
     if(msg.type === 'full' && Array.isArray(msg.files)){
-      const arr = msg.files.map(f => ({ name:f.name, url:f.url, size:toNum(f.size), lastModified:toNum(f.lastModified), thumbnail: f.thumbnail || null }));
+      const arr = msg.files.map(f => ({ name:f.name, url:f.url, size:toNum(f.size), lastModified:toNum(f.lastModified), thumbnail:f.thumbnail||null }));
       const seen = new Set(), unique = [];
       for(const it of arr){ if(!it.url) continue; if(!seen.has(it.url)){ seen.add(it.url); unique.push(it); } }
       window.allFiles = unique.slice(0, CONFIG.METADATA_CAP);
@@ -693,4 +663,4 @@
 })();
 </script>
 </body>
-  </html>
+</html>
