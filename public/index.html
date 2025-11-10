@@ -230,23 +230,18 @@
 
   // Build ordered list: images (newest-first standalone) come first, then grouped videos/files.
   function buildOrderedList(files){
-    const all = files || [];
-
-    // tout imaj (newest-first)
-    const images = all.filter(isImageFile).slice().sort((a,b)=> toNum(b.lastModified) - toNum(a.lastModified));
-    const newestImage = images.length ? images[0] : null;
-
-    // kreye gwoup pou tout fichye (imaj + lòt)
+    const images = (files||[]).filter(isImageFile).slice().sort((a,b)=> toNum(b.lastModified) - toNum(a.lastModified));
+    const others = (files||[]).filter(f => !isImageFile(f.name||''));
     const groups = new Map();
-    all.forEach(f=>{
+    others.forEach(f=>{
       try {
         const p = parseParts(f.name||'');
         const baseKey = (p && p.base) ? p.base : (f.name||'').replace(/\.[^.]+$/,'');
-        if(!groups.has(baseKey)) groups.set(baseKey, []);
+        if(!groups.has(baseKey)) groups.set(baseKey,[]);
         groups.get(baseKey).push(f);
       } catch(e) {
         const fallback = (f.name||'').replace(/\.[^.]+$/,'');
-        if(!groups.has(fallback)) groups.set(fallback, []);
+        if(!groups.has(fallback)) groups.set(fallback,[]);
         groups.get(fallback).push(f);
       }
     });
@@ -256,7 +251,6 @@
       return { base, items, newest };
     });
 
-    // triy gwoup yo pa dènye upload (descending)
     groupArr.sort((g1,g2) => {
       const a = toNum(g2.newest) - toNum(g1.newest);
       if(a !== 0) return a;
@@ -264,26 +258,11 @@
     });
 
     const out = [];
+    // push images first (newest-first)
+    for(const img of images) out.push(img);
 
-    // Mete sèlman DÈNYE imaj global an premye (si genyen)
-    if(newestImage){
-      out.push(newestImage);
-      // retire li nan gwoup li pou pa repete li pita
-      try{
-        const p = parseParts(newestImage.name||'');
-        const baseKey = (p && p.base) ? p.base : (newestImage.name||'').replace(/\.[^.]+$/,'');
-        const grp = groups.get(baseKey);
-        if(grp){
-          const idx = grp.findIndex(x => x.url === newestImage.url);
-          if(idx !== -1) grp.splice(idx,1);
-        }
-      }catch(e){}
-    }
-
-    // Apre sa, pouse tout gwoup yo (imaj rete ladan yo si yo pa te dènye)
+    // then push grouped structure for others
     for(const g of groupArr){
-      g.items = (g.items||[]).filter(Boolean);
-      if(!g.items.length) continue;
       g.items.sort(intraGroupCompare);
       out.push({ __groupHeader:true, base:g.base, newest:g.newest });
 
@@ -604,4 +583,4 @@
 })();
 </script>
 </body>
-</html>
+  </html>
