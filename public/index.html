@@ -76,13 +76,20 @@
   const toNum = v => (v === undefined || v === null) ? 0 : Number(v) || 0;
   const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
-  window.allFiles = []; // raw list (images + others)
+  window.allFiles = [];
   window.viewFiles = [];
   let ws = null, es = null, pollTimer = null, reconnectAttempts = 0;
   let pendingMsgs = [];
-  let silentLogCache = []; // used for non-image files
+  let silentLogCache = [];
   let renderedCount = 0;
   let sentinelObserver = null;
+
+  function normalizeString(s) {
+    if (!s) return '';
+    try { s = s.normalize('NFKD').replace(/[\u0300-\u036f]/g,''); } catch(e){}
+    try { s = s.replace(/[^\p{L}\p{N}]+/gu,' '); } catch(e) { s = s.replace(/[^A-Za-z0-9]+/g,' '); }
+    return s.replace(/\s+/g,' ').trim().toLowerCase();
+  }
 
   function isImageFile(name){ return !!(name||'').match(/\.(jpg|jpeg|png|gif|webp)$/i); }
   function isVideoFile(name){ return !!(name||'').match(/\.(mp4|mov|webm|mkv)$/i); }
@@ -92,79 +99,102 @@
     return s.replace(/[\(\{][^\)\}]*[\]\)\}]/g,'').replace(/\s+/g,' ').trim();
   }
 
-  function insertSoftBreaks(str,maxLen=40){
-    if(!str) return '';
-    return str.replace(/\S+/g, (chunk) => {
-      if(chunk.length <= maxLen) return chunk;
-      let out = '';
-      for(let i=0;i<chunk.length;i+=maxLen){ out += chunk.slice(i,i+maxLen); if(i+maxLen<chunk.length) out += '\u200b'; }
-      return out;
-    });
+  function stripPrefixes(noExt){
+    if(!noExt) return '';
+    let s = noExt;
+    s = s.replace(/^[0-9]{6,}[_\-]*/,'');
+    s = s.replace(/^[\{\[][^)\}]*[\)\]\}][_-\s]*/,'');
+    s = s.replace(/^@[^_\-\s]+[_\-\s]*/g,'').replace(/^[_\-]+@[^_\-\s]+[_\-\s]*/g,'');
+    s = s.replace(/[_\-]*@[^_\s\-_]+[_\-]*/g,' ');
+    s = s.replace(/[_\-\.\s]+/g,' ');
+    s = s.replace(/\s+/g,' ').trim();
+    return s;
   }
 
-  function copyText(text){
-    if(!text) return;
-    if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).catch(()=>{});
-    else{
-      const ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.left='-9999px'; document.body.appendChild(ta);
-      ta.select(); try{ document.execCommand('copy'); }catch(e){} ta.remove();
+  function _removeSeasonEpisodeTokens(raw){
+    if(!raw) return raw;
+    let s = String(raw);
+    const patterns = [
+      /[sS][\s._\-:]*0*(\d{1,3})[\s._\-]*[eE][\s._\-:]*0*(\d{1,3})/g,
+      /[eE][\s._\-:]*0*(\d{1,3})[\s._\-]*[sS][\s._\-:]*0*(\d{1,3})/g,
+      /\b(?:season|saison)[\s._\-:]*0*(\d{1,3})[\s,._\-]*\b(?:ep(?:isode)?|e)[\s._\-:]*0*(\d{1,3})/ig,
+      /\b(?:ep(?:isode)?|episode)[\s._\-:]*0*(\d{1,3})[\s,._\-]*\b(?:season|saison)[\s._\-:]*0*(\d{1,3})/ig,
+      /\b[sS][\s._\-:]*0*(\d{1,3})\b/g,
+      /\b(?:season|saison)[\s._\-:]*0*(\d{1,3})\b/ig,
+      /\b[eE][\s._\-:]*0*(\d{1,3})\b/g,
+      /\b(?:ep(?:isode)?|episode)[\s._\-:]*0*(\d{1,3})\b/ig
+    ];
+    for(const re of patterns){ s = s.replace(re, ' '); }
+    s = s.replace(/[\(\{][^\)\}]*[\]\)\}]/g,' ');
+    s = s.replace(/[_\-\.\s]+/g,' ').trim();
+    return s;
+  }
+
+  function extractBaseName(name){
+    if(!name) return '';
+    const noExt = name.replace(/\.[^.]+$/,'');
+    if(isImageFile(name)){
+      let cleaned = noExt.replace(/[^\p{L}\p{N}_\-\.\s]/gu,'');
+      cleaned = _removeSeasonEpisodeTokens(cleaned);
+      return normalizeString(cleaned);
     }
+    let stripped = stripPrefixes(noExt);
+    const cleanedNoTokens = _removeSeasonEpisodeTokens(stripped);
+    let cleaned = cleanedNoTokens.replace(/\b(vf|vostfr|vost|fr|sub|dub)\b/gi,'').replace(/\b\d{2,6}\b/g,'').replace(/\s+/g,' ').trim();
+    if(!cleaned) cleaned = cleanedNoTokens;
+    return normalizeString(cleaned);
   }
 
-  function copyUrl(url){ if(!url) return; copyText(url); }
-  window.copyUrl = copyUrl;
-
-  function createGroupHeader(f){
-    const head = document.createElement('div'); head.className = 'group-head';
-    const left = document.createElement('div'); left.className = 'group-title';
-    left.textContent = (f.base ? f.base.replace(/\s+/g,' ') : '(sans nom)');
-    head.appendChild(left);
-    const rightWrap = document.createElement('div'); rightWrap.style.display='flex'; rightWrap.style.gap='8px'; rightWrap.style.alignItems='center';
-    const right = document.createElement('div'); right.style.fontSize='13px'; right.style.color='#555'; right.style.whiteSpace='nowrap';
-    right.textContent = f.newest ? ('Dernier upload : ' + new Date(Number(f.newest)).toLocaleString()) : '';
-    rightWrap.appendChild(right);
-    const copyAllBtn = document.createElement('button'); copyAllBtn.className='copy-all-btn'; copyAllBtn.innerHTML = 'Copier tout';
-    copyAllBtn.addEventListener('click', (ev) => { ev.stopPropagation(); try{ copyGroup(f.base); } catch(e){} copyAllBtn.classList.add('copied'); setTimeout(()=>copyAllBtn.classList.remove('copied'),1200); });
-    rightWrap.appendChild(copyAllBtn);
-    head.appendChild(rightWrap);
-    return head;
-  }
-
-  function createSeasonHeader(obj){
-    const head = document.createElement('div'); head.className = 'season-head';
-    const left = document.createElement('div'); left.className = 'season-title';
-    left.textContent = obj.seasonLabel || (obj.season === 'base' ? 'Base' : ('Saison ' + obj.season));
-    head.appendChild(left);
-    if(obj.note){
-      const note = document.createElement('div'); note.style.fontSize='12px'; note.style.color='#666'; note.textContent = obj.note;
-      head.appendChild(note);
-    }
-    return head;
-  }
-
-  // Minimal parseParts kept only for video grouping ordering (season/ep detection)
   function parseParts(name){
     const noExt = (name||'').replace(/\.[^.]+$/,'');
-    const raw = noExt.replace(/[_\-\.\s]+/g,' ').trim();
+    if(isImageFile(name)){
+      const rawNorm = removeBracketed(noExt).replace(/[_\-\.\s]+/g,' ').replace(/\s+/g,' ').trim();
+      const base = normalizeString(_removeSeasonEpisodeTokens(rawNorm));
+      return { base, season:null, ep:null, hasSeason:false, hasEp:false, raw:rawNorm };
+    }
+    const stripped = stripPrefixes(noExt);
+    const rawNorm = stripped.replace(/[_\-\.\s]+/g,' ').replace(/\s+/g,' ').trim();
     let season = null, ep = null, hasSeason=false, hasEp=false;
     let m;
-    m = raw.match(/[sS][\s._\-:]*0*(\d{1,3})[\s._\-]*[eE][\s._\-:]*0*(\d{1,3})/);
+    m = rawNorm.match(/[sS][\s._\-:]*0*(\d{1,3})[\s._\-]*[eE][\s._\-:]*0*(\d{1,3})/);
     if(m){ season = toNum(m[1]); ep = toNum(m[2]); hasSeason=true; hasEp=true; }
     if(!hasSeason || !hasEp){
-      m = raw.match(/\b(?:season|saison)[\s._\-:]*0*(\d{1,3})[\s,._\-]*\b(?:ep(?:isode)?|e)[\s._\-:]*0*(\d{1,3})/i);
+      m = rawNorm.match(/[eE][\s._\-:]*0*(\d{1,3})[\s._\-]*[sS][\s._\-:]*0*(\d{1,3})/);
+      if(m){ ep = toNum(m[1]); season = toNum(m[2]); hasSeason=true; hasEp=true; }
+    }
+    if(!hasSeason || !hasEp){
+      m = rawNorm.match(/\b(?:season|saison)[\s._\-:]*0*(\d{1,3})[\s,._\-]*\b(?:ep(?:isode)?|e)[\s._\-:]*0*(\d{1,3})/i);
       if(m){ season = toNum(m[1]); ep = toNum(m[2]); hasSeason=true; hasEp=true; }
     }
+    if(!hasSeason){
+      m = rawNorm.match(/\b[sS][\s._\-:]*0*(\d{1,3})\b/);
+      if(m){ season = toNum(m[1]); hasSeason = true; }
+      else {
+        m = rawNorm.match(/\b(?:season|saison)[\s._\-:]*0*(\d{1,3})\b/i);
+        if(m){ season = toNum(m[1]); hasSeason = true; }
+      }
+    }
     if(!hasEp){
-      m = raw.match(/\b(?:ep(?:isode)?|episode|[eE])[\s._\-:]*0*(\d{1,3})\b/i);
+      m = rawNorm.match(/\b(?:ep(?:isode)?|episode|[eE])[\s._\-:]*0*(\d{1,3})\b/i);
       if(m){ ep = toNum(m[1] || m[0].replace(/\D/g,'')); hasEp = true; }
     }
     if(!hasEp && !hasSeason){
-      const singleNum = raw.match(/\b0*(\d{1,3})\b/);
+      const singleNum = rawNorm.match(/\b0*(\d{1,3})\b/);
       if(singleNum){ ep = toNum(singleNum[1]); hasEp = true; season = 1; }
     }
-    if(hasEp && !hasSeason) season = 1;
-    const base = raw.replace(/[sS][\s._\-:]*0*\d{1,3}[\s._\-]*[eE][\s._\-:]*0*\d{1,3}/g,'').replace(/\b(?:season|saison|episode|ep|e)\b/ig,'').replace(/\b(vf|vostfr|vost|fr|sub|dub)\b/ig,'').replace(/\s+/g,' ').trim().toLowerCase();
-    return { base, season: season!=null?season:null, ep: ep!=null?ep:null, hasSeason: !!hasSeason, hasEp: !!hasEp, raw };
+    if(hasEp && !hasSeason){ season = 1; }
+    let baseRaw = _removeSeasonEpisodeTokens(rawNorm);
+    baseRaw = baseRaw.replace(/\b(vf|vostfr|vost|fr|sub|dub)\b/gi,'').replace(/\s+/g,' ').trim();
+    if(!baseRaw) baseRaw = rawNorm;
+    const base = normalizeString(baseRaw);
+    return {
+      base,
+      season: (season != null) ? toNum(season) : null,
+      ep: (ep != null) ? toNum(ep) : null,
+      hasSeason: !!hasSeason,
+      hasEp: !!hasEp,
+      raw: rawNorm
+    };
   }
 
   function intraGroupCompare(a,b){
@@ -184,6 +214,34 @@
     const aNoExt = (a.name||'').replace(/\.[^.]+$/,'');
     const bNoExt = (b.name||'').replace(/\.[^.]+$/,'');
     return collator.compare(aNoExt,bNoExt);
+  }
+
+  function createGroupHeader(f){
+    const head = document.createElement('div'); head.className = 'group-head';
+    const left = document.createElement('div'); left.className = 'group-title';
+    const displayBase = (f.base ? f.base.replace(/\s+/g,' ') : '(sans nom)');
+    left.textContent = displayBase;
+    head.appendChild(left);
+    const rightWrap = document.createElement('div'); rightWrap.style.display='flex'; rightWrap.style.gap='8px'; rightWrap.style.alignItems='center';
+    const right = document.createElement('div'); right.style.fontSize='13px'; right.style.color='#555'; right.style.whiteSpace='nowrap'; right.textContent = f.newest ? ('Dernier upload : ' + new Date(Number(f.newest)).toLocaleString()) : '';
+    rightWrap.appendChild(right);
+    const copyAllBtn = document.createElement('button'); copyAllBtn.className='copy-all-btn'; copyAllBtn.title='Copier tous les Name_epX_sY + Url'; copyAllBtn.innerHTML = 'Copier tout';
+    copyAllBtn.addEventListener('click', (ev) => { ev.stopPropagation(); try{ copyGroup(f.base); } catch(e){} copyAllBtn.classList.add('copied'); setTimeout(()=>copyAllBtn.classList.remove('copied'),1200); });
+    rightWrap.appendChild(copyAllBtn);
+    head.appendChild(rightWrap);
+    return head;
+  }
+
+  function createSeasonHeader(obj){
+    const head = document.createElement('div'); head.className = 'season-head';
+    const left = document.createElement('div'); left.className = 'season-title';
+    left.textContent = obj.seasonLabel || (obj.season === 'base' ? 'Base' : ('Saison ' + obj.season));
+    head.appendChild(left);
+    if(obj.note){
+      const note = document.createElement('div'); note.style.fontSize='12px'; note.style.color='#666'; note.textContent = obj.note;
+      head.appendChild(note);
+    }
+    return head;
   }
 
   function createCardElement(f, createVideo=true){
@@ -209,7 +267,19 @@
     const nameDiv = document.createElement('div'); nameDiv.className='name';
     const rawName = f.name || '(sans nom)';
     const displayRaw = removeBracketed(rawName.replace(/\.[^.]+$/,''));
-    nameDiv.textContent = insertSoftBreaks(displayRaw,40);
+    const leadingMatch = rawName.match(/^(\d+)/);
+    if(leadingMatch){
+      const digits = leadingMatch[1];
+      const rest = rawName.slice(digits.length);
+      const restDisplay = removeBracketed(rest.replace(/\.[^.]+$/,'')).trim();
+      const prefixSpan = document.createElement('span'); prefixSpan.className='prefix-span'; prefixSpan.textContent = insertSoftBreaks(digits,40);
+      prefixSpan.title = 'Cliquer pour copier le nombre';
+      prefixSpan.addEventListener('click', (ev)=>{ ev.stopPropagation(); copyText(digits); prefixSpan.classList.add('copied'); setTimeout(()=>prefixSpan.classList.remove('copied'),1200); });
+      const restSpan = document.createElement('span'); restSpan.textContent = insertSoftBreaks(restDisplay || rest,40); restSpan.style.whiteSpace='pre-wrap';
+      nameDiv.appendChild(prefixSpan); nameDiv.appendChild(restSpan);
+    } else {
+      nameDiv.textContent = insertSoftBreaks(displayRaw,40);
+    }
 
     if(f.__isNewestForEpisode){
       const badge = document.createElement('span'); badge.className='badge-new'; badge.textContent='NOUVO'; badge.style.fontSize='11px'; badge.style.padding='4px 8px'; badge.style.marginLeft='8px';
@@ -228,15 +298,12 @@
     return card;
   }
 
-  // Build ordered list: images (newest-first standalone) come first, then grouped videos/files.
   function buildOrderedList(files){
-    const images = (files||[]).filter(isImageFile).slice().sort((a,b)=> toNum(b.lastModified) - toNum(a.lastModified));
-    const others = (files||[]).filter(f => !isImageFile(f.name||''));
     const groups = new Map();
-    others.forEach(f=>{
+    (files||[]).forEach(f=>{
       try {
         const p = parseParts(f.name||'');
-        const baseKey = (p && p.base) ? p.base : (f.name||'').replace(/\.[^.]+$/,'');
+        const baseKey = (p && p.base) ? p.base : extractBaseName(f.name||'') || (f.name||'').replace(/\.[^.]+$/,'');
         if(!groups.has(baseKey)) groups.set(baseKey,[]);
         groups.get(baseKey).push(f);
       } catch(e) {
@@ -258,14 +325,8 @@
     });
 
     const out = [];
-    // push images first (newest-first)
-    for(const img of images) out.push(img);
-
-    // then push grouped structure for others
     for(const g of groupArr){
       g.items.sort(intraGroupCompare);
-      out.push({ __groupHeader:true, base:g.base, newest:g.newest });
-
       const seasonMap = new Map();
       for(const it of g.items){
         const p = parseParts(it.name||'');
@@ -284,8 +345,11 @@
         return Number(a) - Number(b);
       });
 
+      out.push({ __groupHeader:true, base:g.base, newest:g.newest });
+
       for(const sk of seasonKeys){
         const items = seasonMap.get(sk) || [];
+        const seasonLabel = (sk === 'base') ? 'Base' : String(sk);
         out.push({ __seasonHeader:true, season: sk, seasonLabel: (sk === 'base' ? 'Base' : ('Saison ' + sk)), note:'' });
 
         const epBuckets = new Map();
@@ -316,8 +380,65 @@
         }
       }
     }
-
     return out;
+  }
+
+  function escapeHtml(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  function copyText(text){
+    if(!text) return;
+    if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).catch(()=>{});
+    else{
+      const ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.left='-9999px'; document.body.appendChild(ta);
+      ta.select(); try{ document.execCommand('copy'); }catch(e){} ta.remove();
+    }
+  }
+
+  function insertSoftBreaks(str,maxLen=40){
+    if(!str) return '';
+    return str.replace(/\S+/g, (chunk) => {
+      if(chunk.length <= maxLen) return chunk;
+      let out = '';
+      for(let i=0;i<chunk.length;i+=maxLen){ out += chunk.slice(i,i+maxLen); if(i+maxLen<chunk.length) out += '\u200b'; }
+      return out;
+    });
+  }
+
+  function copyGroup(base){
+    if(!base) return;
+    const files = (window.allFiles||[]).filter(f=>{ try{ return parseParts(f.name||'').base === base } catch(e){ return false } }).filter(f=>f.url);
+    if(!files.length){ copyText(`Aucun fichier trouvé pour: ${base}`); return; }
+    const epMap = new Map(); const baseFiles = [];
+    for(const f of files){
+      const p = parseParts(f.name||'');
+      let season = (p.season != null) ? p.season : (p.hasEp ? 1 : null);
+      let ep = (p.ep != null) ? p.ep : null;
+      if(season === null && ep === null){ baseFiles.push({f,p}); continue; }
+      season = season == null ? 0 : Number(season);
+      ep = ep == null ? 0 : Number(ep);
+      const key = `s${season}e${ep}`;
+      const existing = epMap.get(key);
+      if(!existing) epMap.set(key,{file:f,season,ep});
+      else { if(toNum(f.lastModified) > toNum(existing.file.lastModified)) epMap.set(key,{file:f,season,ep}); }
+    }
+    const sortedKeys = Array.from(epMap.keys()).sort((a,b)=> {
+      const ma = a.match(/^s(\d+)e(\d+)$/), mb = b.match(/^s(\d+)e(\d+)$/);
+      const sa = ma ? Number(ma[1]) : 0, ea = ma ? Number(ma[2]) : 0;
+      const sb = mb ? Number(mb[1]) : 0, eb = mb ? Number(mb[2]) : 0;
+      if(sa !== sb) return sa - sb;
+      return ea - eb;
+    });
+    let out = '';
+    for(const k of sortedKeys){
+      const item = epMap.get(k); if(!item) continue;
+      const labelName = `ep${item.ep}_s${item.season}`;
+      out += `${labelName}\n${item.file.name || '(sans nom)'}\nUrl\n${item.file.url || ''}\n\n`;
+    }
+    if(baseFiles.length){
+      baseFiles.sort((a,b)=> toNum(b.f.lastModified) - toNum(a.f.lastModified));
+      for(const bf of baseFiles){ out += `Name_base\n${bf.f.name || '(sans nom)'}\nUrl\n${bf.f.url || ''}\n\n`; }
+    }
+    copyText(out.trim());
   }
 
   function renderNextChunk(){
@@ -330,7 +451,6 @@
     for(let i = renderedCount; i < limit; i++){
       const f = source[i];
       if(f.__groupHeader){ frag.appendChild(createCardElement(f,false)); continue; }
-      if(f.__seasonHeader){ frag.appendChild(createCardElement(f,false)); continue; }
       const isVideo = isVideoFile(f.name||'');
       const createVideo = isVideo ? (videoCount < CONFIG.MAX_VIDEOS_RENDER) : false;
       const card = createCardElement(f, createVideo);
@@ -423,7 +543,7 @@
       for(const f of msg.files){
         const file = { name:f.name, url:f.url, size: toNum(f.size), lastModified: toNum(f.lastModified), thumbnail: f.thumbnail || null };
         if(isImageFile(file.name)){
-          window.allFiles = (window.allFiles || []).filter(x=>x.url !== file.url);
+          window.allFiles = (window.allFiles || []).filter(x => x.url !== file.url);
           window.allFiles.unshift(file);
           anyImmediate = true;
         } else {
@@ -433,9 +553,8 @@
       if(anyImmediate){
         if(window.allFiles.length > CONFIG.METADATA_CAP) window.allFiles.length = CONFIG.METADATA_CAP;
         fullRerender();
-      } else {
-        updateNewIndicator();
       }
+      updateNewIndicator();
     }
   }
 
@@ -479,27 +598,25 @@
   }
   function stopPolling(){ if(pollTimer){ clearInterval(pollTimer); pollTimer = null; } }
 
+  function copyUrl(url){ if(!url) return; if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(url).catch(()=>{}); else { const ta=document.createElement('textarea'); ta.value=url; document.body.appendChild(ta); ta.select(); try{ document.execCommand('copy'); }catch(e){} ta.remove(); } }
+  window.copyUrl = copyUrl;
+
   function mergeSilentToAll(count=1){
     if(!silentLogCache.length) return 0;
     const items = silentLogCache.splice(0,count);
     const existingUrls = new Set((window.allFiles||[]).map(x=>x.url));
     const toAdd = items.filter(it => !existingUrls.has(it.url) && !isImageFile(it.name));
     if(!toAdd.length) return 0;
-
     const prevScrollY = window.scrollY || 0;
     const prevDocH = document.documentElement.scrollHeight || 0;
-
     window.allFiles = toAdd.concat(window.allFiles).slice(0, CONFIG.METADATA_CAP);
-
     renderedCount = 0;
     const listEl = document.getElementById('fileList');
     listEl.innerHTML = '';
     renderNextChunk();
-
     const newDocH = document.documentElement.scrollHeight || 0;
     const delta = newDocH - prevDocH;
     window.scrollTo(0, Math.max(0, prevScrollY + delta));
-
     updateNewIndicator();
     return toAdd.length;
   }
@@ -533,43 +650,6 @@
       updateNewIndicator();
     }
   }, CONFIG.SILENT_FLUSH_INTERVAL_MS);
-
-  function copyGroup(base){
-    if(!base) return;
-    const files = (window.allFiles||[]).filter(f=>{ try{ return parseParts(f.name||'').base === base } catch(e){ return false } }).filter(f=>f.url);
-    if(!files.length){ copyText(`Aucun fichier trouvé pour: ${base}`); return; }
-    const epMap = new Map(); const baseFiles = [];
-    for(const f of files){
-      const p = parseParts(f.name||'');
-      let season = (p.season != null) ? p.season : (p.hasEp ? 1 : null);
-      let ep = (p.ep != null) ? p.ep : null;
-      if(season === null && ep === null){ baseFiles.push({f,p}); continue; }
-      season = season == null ? 0 : Number(season);
-      ep = ep == null ? 0 : Number(ep);
-      const key = `s${season}e${ep}`;
-      const existing = epMap.get(key);
-      if(!existing) epMap.set(key,{file:f,season,ep});
-      else { if(toNum(f.lastModified) > toNum(existing.file.lastModified)) epMap.set(key,{file:f,season,ep}); }
-    }
-    const sortedKeys = Array.from(epMap.keys()).sort((a,b)=> {
-      const ma = a.match(/^s(\d+)e(\d+)$/), mb = b.match(/^s(\d+)e(\d+)$/);
-      const sa = ma ? Number(ma[1]) : 0, ea = ma ? Number(ma[2]) : 0;
-      const sb = mb ? Number(mb[1]) : 0, eb = mb ? Number(mb[2]) : 0;
-      if(sa !== sb) return sa - sb;
-      return ea - eb;
-    });
-    let out = '';
-    for(const k of sortedKeys){
-      const item = epMap.get(k); if(!item) continue;
-      const labelName = `ep${item.ep}_s${item.season}`;
-      out += `${labelName}\n${item.file.name || '(sans nom)'}\nUrl\n${item.file.url || ''}\n\n`;
-    }
-    if(baseFiles.length){
-      baseFiles.sort((a,b)=> toNum(b.f.lastModified) - toNum(a.f.lastModified));
-      for(const bf of baseFiles){ out += `Name_base\n${bf.f.name || '(sans nom)'}\nUrl\n${bf.f.url || ''}\n\n`; }
-    }
-    copyText(out.trim());
-  }
 
   function connectInitial(){
     loadFiles();
