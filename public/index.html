@@ -50,14 +50,11 @@
       <button id="showNewBtn" class="show-btn" style="display:none">Afficher</button>
     </div>
   </header>
-
   <div class="search-bar">
     <input id="searchInput" type="text" placeholder="Rechercher par nom, épisode, season, URL..." />
   </div>
-
   <div id="fileList" class="container"></div>
   <div id="emptyMessage" class="empty" style="display:none">Aucun fichier trouvé.</div>
-
 <script>
 (() => {
   const CONFIG = {
@@ -97,14 +94,15 @@
 
   function removeBracketed(s){
     if(!s) return s;
-    return s.replace(/[\(\[\{][^\)\]\}]*[\)\]\}]/g,'').replace(/\s+/g,' ').trim();
+    // Remove bracketed groups like "[...]" or "(...)" or "{...}"
+    return s.replace(/[\[\(\{][^\]\)\}]*[\]\)\}]/g,'').replace(/\s+/g,' ').trim();
   }
 
   function stripPrefixes(noExt){
     if(!noExt) return '';
     let s = noExt;
     s = s.replace(/^[0-9]{6,}[_\-]*/,'');
-    s = s.replace(/^[\(\{][^\)\}]*[\]\)\}][_-\s]*/g,'');
+    s = s.replace(/^[\(\{\[][^)\]\}]*[\)\]\}][_-\s]*/,'');
     s = s.replace(/^@[^_\-\s]+[_\-\s]*/g,'').replace(/^[_\-]+@[^_\-\s]+[_\-\s]*/g,'');
     s = s.replace(/[_\-]*@[^_\s\-_]+[_\-]*/g,' ');
     s = s.replace(/[_\-\.\s]+/g,' ');
@@ -112,27 +110,29 @@
     return s;
   }
 
-function firstTokenIndex(noExt) {
-  const patterns = [
-    /\b[sS]0*\d+[^\d]*[eE]0*\d+\b/i,
-    /\b[eE]0*\d+[^\d]*[sS]0*\d+\b/i,
-    /\b(?:saison|season|s)\b[\W_]*0*\d+/i,
-    /\b(?:ep(?:isode)?|e)\b[\W_]*0*\d+/i,
-    /\b(\d{1,3})\b/
-  ];
+  function firstTokenIndex(noExt) {
+    if(!noExt) return -1;
+    const patterns = [
+      /\b[sS]0*\d+[^\d]*[eE]0*\d+\b/i,
+      /\b[eE]0*\d+[^\d]*[sS]0*\d+\b/i,
+      /\b(?:saison|season|s)\b[\W_]*0*\d+/i,
+      /\b(?:ep(?:isode)?|e)\b[\W_]*0*\d+/i,
+      /\b(\d{1,3})\b/
+    ];
 
-  const name = noExt.replace(/[\u2010-\u2015–—_.\-]+/g, ' ').toLowerCase();
+    // operate on stripped & normalized name so prefixes don't confuse positions
+    const stripped = stripPrefixes(noExt);
+    const name = stripped.replace(/[\u2010-\u2015–—_.\-]+/g, ' ').toLowerCase();
 
-  for (const regex of patterns) {
-    const match = name.match(regex);
-    if (match) return name.indexOf(match[0]);
-  }
-  return -1;
-}
     let minPos = -1;
-    for(const re of patterns){
-      const pos = noExt.search(re);
-      if(pos >= 0){ if(minPos===-1 || pos < minPos) minPos = pos; }
+    for (const re of patterns) {
+      const match = name.match(re);
+      if (match) {
+        const pos = name.indexOf(match[0]);
+        if (pos >= 0) {
+          if (minPos === -1 || pos < minPos) minPos = pos;
+        }
+      }
     }
     return minPos;
   }
@@ -461,7 +461,7 @@ function firstTokenIndex(noExt) {
   function handleServerMsg(msg){
     if(!msg || !msg.type) return;
     if(msg.type === 'full' && Array.isArray(msg.files)){
-      const arr = msg.files.map(f => ({ name:f.name, url:f.url, size:toNum(f.size), lastModified:toNum(f.lastModified), thumbnail:f.thumbnail||null }));
+      const arr = msg.files.map(f => ({ name:f.name, url:f.url, size:toNum(f.size), lastModified:toNum(f.lastModified), thumbnail:f.thumbnail || null }));
       const seen = new Set(), unique = [];
       for(const it of arr){ if(!it.url) continue; if(!seen.has(it.url)){ seen.add(it.url); unique.push(it); } }
       window.allFiles = unique.slice(0, CONFIG.METADATA_CAP);
@@ -595,4 +595,4 @@ function firstTokenIndex(noExt) {
 })();
 </script>
 </body>
-</html>
+  </html>
