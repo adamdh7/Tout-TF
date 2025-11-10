@@ -100,7 +100,8 @@
 
   function createSeasonHeader(obj){
     const head = document.createElement('div'); head.className = 'season-head'; const left = document.createElement('div'); left.className = 'season-title'; left.textContent = obj.seasonLabel || (obj.season === 'base' ? 'Base' : ('Saison ' + obj.season)); head.appendChild(left);
-    if(obj.note){ const note = document.createElement('div'); note.style.fontSize='12px'; note.style.color='#666'; note.textContent = obj.note; head.appendChild(note); } return head;
+    if(obj.note){ const note = document.createElement('div'); note.style.fontSize='12px'; note.style.color='#666'; note.textContent = obj.note; head.appendChild(note); }
+    return head;
   }
 
   function parseParts(name){
@@ -158,9 +159,12 @@
     }
 
     const info = document.createElement('div'); info.className='info';
-    const nameDiv = document.createElement('div'); nameDiv.className='name'; const rawName = f.name || '(sans nom)'; const displayRaw = rawName.replace(/\.[^.]+$/,'').replace(/[^\S\r\n]+/g,' ').trim();
+    const nameDiv = document.createElement('div'); nameDiv.className='name';
+    const rawName = f.name || '(sans nom)';
+    const displayRaw = rawName.replace(/\.[^.]+$/,'').replace(/[^\S\r\n]+/g,' ').trim();
     nameDiv.textContent = insertSoftBreaks(displayRaw,40);
     if(f.__isNewestForEpisode){ const badge = document.createElement('span'); badge.className='badge-new'; badge.textContent='NOUVO'; badge.style.fontSize='11px'; badge.style.padding='4px 8px'; badge.style.marginLeft='8px'; nameDiv.appendChild(badge); }
+
     const metaDiv = document.createElement('div'); metaDiv.className='meta'; const sizeMB = ((toNum(f.size)||0)/1048576).toFixed(1); const lm = f.lastModified ? new Date(Number(f.lastModified)).toLocaleString() : '-'; metaDiv.textContent = `${sizeMB} MB • ${lm}`;
     const actions = document.createElement('div'); actions.className='actions';
     const copyBtn = document.createElement('button'); copyBtn.className='small-btn'; copyBtn.textContent='Copier URL'; copyBtn.addEventListener('click', ()=>copyUrl(f.url));
@@ -335,8 +339,7 @@
       window.allFiles = unique.slice(0, CONFIG.METADATA_CAP);
       fullRerender();
     }catch(e){
-      console.error('loadFiles error', e);
-      document.getElementById('emptyMessage').textContent = 'Erreur chargement fichiers (voir console)';
+      document.getElementById('emptyMessage').textContent = 'Erreur chargement fichiers';
       document.getElementById('emptyMessage').style.display = 'block';
     }
   }
@@ -389,13 +392,13 @@
   setInterval(()=> {
     if(!pendingMsgs.length) return;
     const batch = pendingMsgs.splice(0,pendingMsgs.length);
-    for(const m of batch) try{ handleServerMsg(m); } catch(e){ console.error('handleServerMsg error', e); }
+    for(const m of batch) try{ handleServerMsg(m); } catch(e){}
   }, CONFIG.BATCH_FLUSH_MS);
 
   function connectWebSocket(){
     try{ ws = new WebSocket(CONFIG.WS_PATH); } catch(e){ ws=null; startSSE(); startPolling(); return; }
     ws.addEventListener('open', ()=>{ reconnectAttempts = 0; try{ ws.send(JSON.stringify({ type:'subscribe', channel:'files' })); } catch(e){} });
-    ws.addEventListener('message', ev => { try{ const msg = JSON.parse(ev.data); bufferAndFlush(msg); } catch(e){ console.error('WS parse error', e); } });
+    ws.addEventListener('message', ev => { try{ const msg = JSON.parse(ev.data); bufferAndFlush(msg); } catch(e){} });
     ws.addEventListener('close', ()=>{ ws=null; startSSE(); scheduleReconnect(); });
     ws.addEventListener('error', ()=>{ try{ ws.close(); } catch(e){} });
   }
@@ -405,7 +408,7 @@
     if(typeof EventSource === 'undefined'){ startPolling(); return; }
     if(es) return;
     try{ es = new EventSource(CONFIG.SSE_PATH); } catch(e){ es=null; startPolling(); return; }
-    es.onmessage = ev => { try{ const msg = JSON.parse(ev.data); bufferAndFlush(msg); } catch(e){ console.error('SSE parse error', e); } };
+    es.onmessage = ev => { try{ const msg = JSON.parse(ev.data); bufferAndFlush(msg); } catch(e){} };
     es.onerror = ()=>{ try{ es.close(); } catch(e){} es=null; startPolling(); };
   }
 
@@ -413,14 +416,14 @@
     if(pollTimer) return;
     pollTimer = setInterval(()=> {
       fetch(CONFIG.FILES_PATH, { cache:'no-store' })
-        .then(res => res.ok ? res.json() : Promise.reject('err ' + res.status))
+        .then(res => res.ok ? res.json() : Promise.reject('err'))
         .then(files => {
           const arr = (files||[]).map(f=>({ name:f.name, url:sanitizeUrl(f.url), size:toNum(f.size), lastModified: toNum(f.lastModified), thumbnail:sanitizeUrl(f.thumbnail||null) }));
           const seen = new Set(), unique = [];
           for(const it of arr){ if(!it.url) continue; if(!seen.has(it.url)){ seen.add(it.url); unique.push(it); } }
           window.allFiles = unique.slice(0, CONFIG.METADATA_CAP);
           fullRerender();
-        }).catch(e=>{ console.error('poll error', e); });
+        }).catch(()=>{});
     }, CONFIG.POLL_INTERVAL_MS);
   }
   function stopPolling(){ if(pollTimer){ clearInterval(pollTimer); pollTimer = null; } }
@@ -524,4 +527,4 @@
 })();
 </script>
 </body>
-  </html>
+        </html>
