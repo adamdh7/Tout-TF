@@ -112,20 +112,23 @@
     return s;
   }
 
-  function firstTokenIndex(noExt){
-    const patterns = [
-      /(?:[_\s-]|^)(?:ep(?:isode)?|episode)[\W_]*0*\d+/i,
-      /(?:[_\s-]|^)[eE]0*\d+/i,
-      /(?:[_\s-]|^)[ep_Ep_]0*\d+/i,
-      /(?:[_\s-]|^)[Ep ep ]0*\d+/i,
-      /[sS]0*\d+[^\d]*[eE]0*\d+/i,
-      /[eE]0*\d+[^\d]*[sS]0*\d+/i,
-      /(?:[_\s-]|^)(?:saison|season)[\W_]*0*\d+/i,
-      /(?:[_\s-]|^)[sS]0*\d+/i,
-      /(?:[_\s-]|^)[s_S_]0*\d+/i,
-      /(?:[_\s-]|^)[s S ]0*\d+/i,
-      /(?:[_\s-]|^)(\d{1,3})(?:[_\s-]|$)/
-    ];
+function firstTokenIndex(noExt) {
+  const patterns = [
+    /\b[sS]0*\d+[^\d]*[eE]0*\d+\b/i,
+    /\b[eE]0*\d+[^\d]*[sS]0*\d+\b/i,
+    /\b(?:saison|season|s)\b[\W_]*0*\d+/i,
+    /\b(?:ep(?:isode)?|e)\b[\W_]*0*\d+/i,
+    /\b(\d{1,3})\b/
+  ];
+
+  const name = noExt.replace(/[\u2010-\u2015–—_.\-]+/g, ' ').toLowerCase();
+
+  for (const regex of patterns) {
+    const match = name.match(regex);
+    if (match) return name.indexOf(match[0]);
+  }
+  return -1;
+}
     let minPos = -1;
     for(const re of patterns){
       const pos = noExt.search(re);
