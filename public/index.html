@@ -359,7 +359,7 @@
     return card;
   }
 
-  // buildOrderedList (unchanged logic with image grouping)
+  // buildOrderedList (modified: seasons & episodes ordered by newest item first inside each group)
   function buildOrderedList(files){
     const groups = new Map();
     (files||[]).forEach(f=>{
@@ -451,11 +451,23 @@
 
       for(const it of baseOnly) pushToSeason('base', it);
 
-      const seasonKeys = Array.from(seasonMap.keys()).sort((a,b) => {
+      // --------- Modified sorting: order seasons by newest item (desc) so "dernier push" season appears first ----------
+      const seasonKeys = Array.from(seasonMap.keys());
+      const seasonNewest = new Map();
+      for(const sk of seasonKeys){
+        const items = seasonMap.get(sk) || [];
+        const newest = items.reduce((m,it)=> Math.max(m, toNum(it.lastModified)), 0);
+        seasonNewest.set(sk, newest);
+      }
+      seasonKeys.sort((a,b) => {
+        const na = seasonNewest.get(a) || 0;
+        const nb = seasonNewest.get(b) || 0;
+        if(na !== nb) return nb - na; // newest season first
         if(a === 'base') return 1;
         if(b === 'base') return -1;
         return Number(a) - Number(b);
       });
+      // ---------------------------------------------------------------------------------------------------------------
 
       for(const sk of seasonKeys){
         const items = seasonMap.get(sk) || [];
@@ -474,16 +486,29 @@
           epBuckets.set(epKey, arr);
         }
 
-        const epKeys = Array.from(epBuckets.keys()).sort((a,b)=>{
+        // --------- Modified sorting: order episodes by newest item (desc) so newest episodes appear at top ----------
+        const epKeys = Array.from(epBuckets.keys());
+        const epNewest = new Map();
+        for(const ek of epKeys){
+          const arr = epBuckets.get(ek) || [];
+          const newest = arr.reduce((m,it) => Math.max(m, toNum(it.lastModified)), 0);
+          epNewest.set(ek, newest);
+        }
+        epKeys.sort((a,b) => {
+          const na = epNewest.get(a) || 0;
+          const nb = epNewest.get(b) || 0;
+          if(na !== nb) return nb - na; // newest episode first
           if(a === 'base') return 1;
           if(b === 'base') return -1;
           if(a === 0 && b !== 0) return -1;
           if(b === 0 && a !== 0) return 1;
           return Number(a) - Number(b);
         });
+        // ---------------------------------------------------------------------------------------------------------------
 
         for(const ek of epKeys){
           const arr = epBuckets.get(ek) || [];
+          // keep existing behavior: newest file per episode flagged and shown first
           arr.sort((x,y)=> toNum(y.lastModified) - toNum(x.lastModified));
           arr.forEach((it, idx) => it.__isNewestForEpisode = (idx === 0));
           for(const it of arr) out.push(it);
@@ -820,4 +845,4 @@
 })();
 </script>
 </body>
-</html>
+  </html>
