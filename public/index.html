@@ -94,13 +94,13 @@
     return s.replace(/\s+/g,' ').trim().toLowerCase();
   }
 
-  // Canonical base: stronger normalization so similar names group together
+  // stronger canonical base for grouping similar names together
   function canonicalBase(name){
     if(!name) return '';
     let s = (name || '').replace(/\.[^.]+$/,'');
     try { s = s.normalize('NFKD').replace(/[\u0300-\u036f]/g,''); } catch(e){}
     s = s.toLowerCase();
-    // remove common tokens that break grouping
+    // remove tokens that break grouping
     s = s.replace(/\b(film|saison|season|ep|episode|temporada|temp|vostfr|vost|vf|dub|sub)\b/gi,' ');
     // remove standalone numbers (episode ids etc)
     s = s.replace(/\b\d{1,6}\b/g,' ');
@@ -108,6 +108,11 @@
     s = s.replace(/[^a-z0-9]+/g,' ').trim();
     s = s.replace(/\s+/g,' ');
     return s;
+  }
+
+  function prettyFromCanonical(s){
+    if(!s) return '(sans nom)';
+    return s.replace(/[_\-\s]+/g,' ').split(' ').map(w => w ? (w[0].toUpperCase()+w.slice(1)) : '').join(' ').trim() || '(sans nom)';
   }
 
   function getPathnameFromUrlOrName(uOrName) {
@@ -132,6 +137,17 @@
   function removeBracketed(s){
     if(!s) return s;
     return s.replace(/[\(\{][^\)\}]*[\]\)\}]/g,'').replace(/\s+/g,' ').trim();
+  }
+
+  function stripPrefixes(noExt){
+    if(!noExt) return '';
+    let s = noExt;
+    s = s.replace(/^[0-9]{6,}[_\-]*/,'');
+    s = s.replace(/^[\{\[][^)\}]*[\)\]\}][_-\s]*/,'');
+    s = s.replace(/^@[^_\-\s]+[_\-\s]*/g,'').replace(/^[_\-]+@[^_\-\s]+[_\-\s]*/g,'');
+    s = s.replace(/[_\-\.\s]+/g,' ');
+    s = s.replace(/\s+/g,' ').trim();
+    return s;
   }
 
   function parseParts(name){
@@ -204,10 +220,29 @@
     };
   }
 
+  function intraGroupCompare(a,b){
+    const pa = parseParts(a.name||''), pb = parseParts(b.name||'');
+    const aIsBaseOnly = (!pa.hasEp && pa.ep==null) && (!pa.hasSeason && pa.season==null);
+    const bIsBaseOnly = (!pb.hasEp && pb.ep==null) && (!pb.hasSeason && pb.season==null);
+    if(aIsBaseOnly && !bIsBaseOnly) return 1;
+    if(bIsBaseOnly && !aIsBaseOnly) return -1;
+    const sa = pa.season!=null ? toNum(pa.season) : (pa.hasEp ? 1 : 0);
+    const sb = pb.season!=null ? toNum(pb.season) : (pb.hasEp ? 1 : 0);
+    const ea = pa.ep!=null ? toNum(pa.ep) : (pa.hasSeason ? 0 : 999999);
+    const eb = pb.ep!=null ? toNum(pb.ep) : (pb.hasSeason ? 0 : 999999);
+    if(sa !== sb) return sa - sb;
+    if(ea !== eb) return ea - eb;
+    const lmA = toNum(a.lastModified), lmB = toNum(b.lastModified);
+    if(lmA !== lmB) return lmB - lmA;
+    const aNoExt = (a.name||'').replace(/\.[^.]+$/,'');
+    const bNoExt = (b.name||'').replace(/\.[^.]+$/,'');
+    return collator.compare(aNoExt,bNoExt);
+  }
+
   function createGroupHeader(f){
     const head = document.createElement('div'); head.className = 'group-head';
     const left = document.createElement('div'); left.className = 'group-title';
-    const pretty = (f.base || '(sans nom)').replace(/[_\-\s]+/g,' ').trim();
+    const pretty = prettyFromCanonical(f.base || '');
     left.textContent = pretty;
     head.appendChild(left);
     const rightWrap = document.createElement('div'); rightWrap.style.display='flex'; rightWrap.style.gap='8px'; rightWrap.style.alignItems='center';
@@ -331,9 +366,7 @@
     return card;
   }
 
-  // buildOrderedList: groups by canonicalBase, groups ordered by newest desc
-  // inside each group: seasons sorted numeric asc (base last), episodes numeric asc,
-  // and for each episode we show older -> newer (last item marked __isNewestForEpisode)
+  // buildOrderedList: use canonicalBase for grouping; seasons asc; episodes asc; newest marked per-episode
   function buildOrderedList(files){
     const groups = new Map();
     (files||[]).forEach(f=>{
@@ -360,7 +393,7 @@
       return { base, items, newest };
     });
 
-    // groups: newest group first
+    // groups sorted by newest activity (desc)
     groupArr.sort((g1,g2) => {
       const a = toNum(g2.newest) - toNum(g1.newest);
       if(a !== 0) return a;
@@ -375,7 +408,7 @@
         continue;
       }
 
-      // ensure consistent processing order: newest items first (so newest influences group newest)
+      // ensure consistent order for group processing
       g.items.sort((a,b)=> toNum(b.lastModified) - toNum(a.lastModified));
 
       const parsed = g.items.map(it => ({ it, p: parseParts(it.name || '') }));
@@ -429,7 +462,7 @@
 
       for(const it of baseOnly) pushToSeason('base', it);
 
-      // seasons: numeric asc, 'base' last
+      // seasons numeric asc, base last
       const seasonKeys = Array.from(seasonMap.keys()).sort((a,b) => {
         if(a === 'base') return 1;
         if(b === 'base') return -1;
@@ -453,7 +486,7 @@
           epBuckets.set(epKey, arr);
         }
 
-        // episodes: numeric asc, 'base' last
+        // episodes numeric asc, 'base' last
         const epKeys = Array.from(epBuckets.keys()).sort((a,b) => {
           if(a === 'base') return 1;
           if(b === 'base') return -1;
@@ -464,7 +497,7 @@
 
         for(const ek of epKeys){
           const arr = epBuckets.get(ek) || [];
-          // within each episode, older -> newer so newest is last (badge shows newest)
+          // within each episode, sort older -> newer so newest is last (badge will mark it)
           arr.sort((x,y)=> toNum(x.lastModified) - toNum(y.lastModified));
           arr.forEach((it, idx) => it.__isNewestForEpisode = (idx === arr.length - 1));
           for(const it of arr) out.push(it);
@@ -494,10 +527,11 @@
     });
   }
 
+  // copyGroup now uses canonicalBase matching (so "Name ep1" & "Name ep2" are grouped)
   function copyGroup(baseKey){
     if(!baseKey) return;
     const files = (window.allFiles||[]).filter(f=>{
-      try{ return parseParts(f.name||'').base === baseKey; } catch(e){ return false; }
+      try{ return canonicalBase(f.name||'') === baseKey; } catch(e){ return false; }
     }).filter(f=>f.url);
     if(!files.length){ copyText(`Aucun fichier trouvé pour: ${baseKey}`); return; }
 
@@ -546,7 +580,7 @@
     });
 
     let out = '';
-    const prettyBase = (baseKey || '(sans nom)').replace(/[_\-\s]+/g,' ').trim();
+    const prettyBase = prettyFromCanonical(baseKey);
     for(const sk of seasonKeys){
       const arr = seasonMap.get(sk) || [];
       arr.sort((a,b) => {
