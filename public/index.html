@@ -94,91 +94,36 @@
     return s.replace(/\s+/g,' ').trim().toLowerCase();
   }
 
-  // -----------------------
-  // Improved extension detection:
-  // Use URL parsing to get pathname (so query strings won't break detection)
-  // Also fallback to filename if url isn't parseable
-  // -----------------------
   function getPathnameFromUrlOrName(uOrName) {
     if (!uOrName) return '';
-    try {
-      const tmp = new URL(uOrName, location.origin);
-      return tmp.pathname || uOrName;
-    } catch(e){
-      return (uOrName.split('?')[0]).split('#')[0];
-    }
+    try { const tmp = new URL(uOrName, location.origin); return tmp.pathname || uOrName; } catch(e){ return (uOrName.split('?')[0]).split('#')[0]; }
   }
+  function isImageFile(nameOrUrl) { const path = getPathnameFromUrlOrName(nameOrUrl).toLowerCase(); return !!path.match(/\.(jpg|jpeg|png|gif|webp|bmp|heic)(?:$)/i); }
+  function isVideoFile(nameOrUrl) { const path = getPathnameFromUrlOrName(nameOrUrl).toLowerCase(); return !!path.match(/\.(mp4|mov|webm|m4v|mkv)(?:$)/i); }
 
-  function isImageFile(nameOrUrl) {
-    const path = getPathnameFromUrlOrName(nameOrUrl).toLowerCase();
-    return !!path.match(/\.(jpg|jpeg|png|gif|webp|bmp|heic)(?:$)/i);
-  }
-  function isVideoFile(nameOrUrl) {
-    const path = getPathnameFromUrlOrName(nameOrUrl).toLowerCase();
-    return !!path.match(/\.(mp4|mov|webm|m4v|mkv)(?:$)/i);
-  }
-  // -----------------------
+  function removeBracketed(s){ if(!s) return s; return s.replace(/[\(\{][^\)\}]*[\]\)\}]/g,'').replace(/\s+/g,' ').trim(); }
 
-  function removeBracketed(s){
-    if(!s) return s;
-    return s.replace(/[\(\{][^\)\}]*[\]\)\}]/g,'').replace(/\s+/g,' ').trim();
-  }
-
-  function stripPrefixes(noExt){
-    if(!noExt) return '';
-    let s = noExt;
-    s = s.replace(/^[0-9]{6,}[_\-]*/,'');
-    s = s.replace(/^[\{\[][^)\}]*[\)\]\}][_-\s]*/,'');
-    s = s.replace(/^@[^_\-\s]+[_\-\s]*/g,'').replace(/^[_\-]+@[^_\-\s]+[_\-\s]*/g,'');
-    s = s.replace(/[_\-\.\s]+/g,' ');
-    s = s.replace(/\s+/g,' ').trim();
-    return s;
-  }
+  function stripPrefixes(noExt){ if(!noExt) return ''; let s = noExt; s = s.replace(/^[0-9]{6,}[_\-]*/,''); s = s.replace(/^[\{\[][^)\}]*[\)\]\}][_-\s]*/,''); s = s.replace(/^@[^_\-\s]+[_\-\s]*/g,'').replace(/^[_\-]+@[^_\-\s]+[_\-\s]*/g,''); s = s.replace(/[_\-\.\s]+/g,' '); s = s.replace(/\s+/g,' ').trim(); return s; }
 
   function parseParts(name){
     const noExt = (name||'').replace(/\.[^.]+$/,'');
     let rawNorm = removeBracketed(noExt).replace(/[_\-\.\s]+/g,' ').replace(/\s+/g,' ').trim();
-
     let leadingNumeric = null;
     const mLead = rawNorm.match(/^(\d{4,}|\d{6,})[-_\s]*/);
-    if(mLead){
-      leadingNumeric = mLead[1].replace(/[-_\s]/g,'');
-      rawNorm = rawNorm.replace(new RegExp('^' + mLead[0].replace(/([.*+?^=!:${}()|[\]/\\])/g,'\\$1')), '').trim();
-    } else {
-      const m2 = rawNorm.match(/^(\d{4,})[-_\s]+/);
-      if(m2){ leadingNumeric = m2[1]; rawNorm = rawNorm.replace(new RegExp('^' + m2[0].replace(/([.*+?^=!:${}()|[\]/\\])/g,'\\$1')), '').trim(); }
-    }
+    if(mLead){ leadingNumeric = mLead[1].replace(/[-_\s]/g,''); rawNorm = rawNorm.replace(new RegExp('^' + mLead[0].replace(/([.*+?^=!:${}()|[\]/\\])/g,'\\$1')), '').trim(); }
+    else { const m2 = rawNorm.match(/^(\d{4,})[-_\s]+/); if(m2){ leadingNumeric = m2[1]; rawNorm = rawNorm.replace(new RegExp('^' + m2[0].replace(/([.*+?^=!:${}()|[\]/\\])/g,'\\$1')), '').trim(); } }
 
     let season = null, ep = null, hasSeason=false, hasEp=false;
     let m;
     m = rawNorm.match(/[sS][\s._\-:]*0*(\d{1,3})[\s._\-]*[eE][\s._\-:]*0*(\d{1,3})/);
     if(m){ season = toNum(m[1]); ep = toNum(m[2]); hasSeason=true; hasEp=true; }
-    if(!hasSeason || !hasEp){
-      m = rawNorm.match(/[eE][\s._\-:]*0*(\d{1,3})[\s._\-]*[sS][\s._\-:]*0*(\d{1,3})/);
-      if(m){ ep = toNum(m[1]); season = toNum(m[2]); hasSeason=true; hasEp=true; }
-    }
-    if(!hasSeason || !hasEp){
-      m = rawNorm.match(/\b(?:season|saison)[\s._\-:]*0*(\d{1,3})[\s,._\-]*\b(?:ep(?:isode)?|e)[\s._\-:]*0*(\d{1,3})/i);
-      if(m){ season = toNum(m[1]); ep = toNum(m[2]); hasSeason=true; hasEp=true; }
-    }
-    if(!hasSeason){
-      m = rawNorm.match(/\b[sS][\s._\-:]*0*(\d{1,3})\b/);
-      if(m){ season = toNum(m[1]); hasSeason = true; }
-      else {
-        m = rawNorm.match(/\b(?:season|saison)[\s._\-:]*0*(\d{1,3})\b/i);
-        if(m){ season = toNum(m[1]); hasSeason = true; }
-      }
-    }
-    if(!hasEp){
-      m = rawNorm.match(/\b(?:ep(?:isode)?|episode|[eE])[\s._\-:]*0*(\d{1,3})\b/i);
-      if(m){ ep = toNum(m[1] || m[0].replace(/\D/g,'')); hasEp = true; }
-    }
+    if(!hasSeason || !hasEp){ m = rawNorm.match(/[eE][\s._\-:]*0*(\d{1,3})[\s._\-]*[sS][\s._\-:]*0*(\d{1,3})/); if(m){ ep = toNum(m[1]); season = toNum(m[2]); hasSeason=true; hasEp=true; } }
+    if(!hasSeason || !hasEp){ m = rawNorm.match(/\b(?:season|saison)[\s._\-:]*0*(\d{1,3})[\s,._\-]*\b(?:ep(?:isode)?|e)[\s._\-:]*0*(\d{1,3})/i); if(m){ season = toNum(m[1]); ep = toNum(m[2]); hasSeason=true; hasEp=true; } }
+    if(!hasSeason){ m = rawNorm.match(/\b[sS][\s._\-:]*0*(\d{1,3})\b/); if(m){ season = toNum(m[1]); hasSeason = true; } else { m = rawNorm.match(/\b(?:season|saison)[\s._\-:]*0*(\d{1,3})\b/i); if(m){ season = toNum(m[1]); hasSeason = true; } } }
+    if(!hasEp){ m = rawNorm.match(/\b(?:ep(?:isode)?|episode|[eE])[\s._\-:]*0*(\d{1,3})\b/i); if(m){ ep = toNum(m[1] || m[0].replace(/\D/g,'')); hasEp = true; } }
 
     let numericToken = null;
-    if(!hasSeason && !hasEp){
-      const nums = Array.from((rawNorm.match(/\d{1,6}/g) || []).map(x => Number(x)));
-      if(nums.length) numericToken = nums[nums.length - 1];
-    }
+    if(!hasSeason && !hasEp){ const nums = Array.from((rawNorm.match(/\d{1,6}/g) || []).map(x => Number(x))); if(nums.length) numericToken = nums[nums.length - 1]; }
 
     let baseRaw = rawNorm;
     if(hasSeason || hasEp){
@@ -245,10 +190,7 @@
     const left = document.createElement('div'); left.className = 'season-title';
     left.textContent = obj.seasonLabel || (obj.season === 'base' ? 'Base' : ('Saison ' + obj.season));
     head.appendChild(left);
-    if(obj.note){
-      const note = document.createElement('div'); note.style.fontSize='12px'; note.style.color='#666'; note.textContent = obj.note;
-      head.appendChild(note);
-    }
+    if(obj.note){ const note = document.createElement('div'); note.style.fontSize='12px'; note.style.color='#666'; note.textContent = obj.note; head.appendChild(note); }
     return head;
   }
 
@@ -278,39 +220,22 @@
     const isVideo = isVideoFile(f.url || f.name || '');
     const isImage = isImageFile(f.url || f.name || '');
     let preview;
-    if(isVideo && createVideo){
-      const vid = document.createElement('video'); vid.className='thumb'; vid.src = f.url; vid.controls = true; vid.preload='metadata'; preview = vid;
-    } else if(isImage){
-      const img = document.createElement('img'); img.className='thumb'; img.alt = f.name||''; img.src = f.url; img.loading = 'lazy'; preview = img;
-    } else if(isVideo && !createVideo){
-      const div = document.createElement('div'); div.className='thumb'; div.style.display='flex'; div.style.alignItems='center'; div.style.justifyContent='center'; div.style.cursor='pointer'; div.textContent='Cliquer pour lire';
-      div.addEventListener('click', ()=>{ const vid=document.createElement('video'); vid.className='thumb'; vid.src=f.url; vid.controls=true; vid.preload='metadata'; div.replaceWith(vid); }, { once:true });
-      preview = div;
-    } else {
-      const div = document.createElement('div'); div.className='thumb'; div.style.display='flex'; div.style.alignItems='center'; div.style.justifyContent='center'; div.style.color='#999'; div.textContent='Pas d’aperçu'; preview = div;
-    }
+    if(isVideo && createVideo){ const vid = document.createElement('video'); vid.className='thumb'; vid.src = f.url; vid.controls = true; vid.preload='metadata'; preview = vid; }
+    else if(isImage){ const img = document.createElement('img'); img.className='thumb'; img.alt = f.name||''; img.src = f.url; img.loading = 'lazy'; preview = img; }
+    else if(isVideo && !createVideo){ const div = document.createElement('div'); div.className='thumb'; div.style.display='flex'; div.style.alignItems='center'; div.style.justifyContent='center'; div.style.cursor='pointer'; div.textContent='Cliquer pour lire'; div.addEventListener('click', ()=>{ const vid=document.createElement('video'); vid.className='thumb'; vid.src=f.url; vid.controls=true; vid.preload='metadata'; div.replaceWith(vid); }, { once:true }); preview = div; }
+    else { const div = document.createElement('div'); div.className='thumb'; div.style.display='flex'; div.style.alignItems='center'; div.style.justifyContent='center'; div.style.color='#999'; div.textContent='Pas d’aperçu'; preview = div; }
 
     const info = document.createElement('div'); info.className='info';
 
-    // -------------------------
-    // NAME ROW: chiffre en gras + '-' + nom (une seule ligne / fond)
-    // -------------------------
     const nameRow = document.createElement('div');
     nameRow.style.display = 'flex';
     nameRow.style.alignItems = 'center';
     nameRow.style.gap = '8px';
     nameRow.style.flexWrap = 'wrap';
 
-    // parse parts to find leadingNumeric
     const p = parseParts(f.name || '');
+    const prefixText = p.leadingNumeric || (() => { const m = (f.name || '').match(/(^|\s)(\d{3,})/); return m ? m[2] : null; })();
 
-    // choose prefix: leadingNumeric if present; else try first long number (>=3 digits)
-    const prefixText = p.leadingNumeric || (() => {
-      const m = (f.name || '').match(/(^|\s)(\d{3,})/);
-      return m ? m[2] : null;
-    })();
-
-    // combined title element
     const titleCombined = document.createElement('div');
     titleCombined.style.display = 'inline';
     titleCombined.style.whiteSpace = 'normal';
@@ -323,12 +248,7 @@
       strong.style.color = '#0f172a';
       strong.style.cursor = 'pointer';
       strong.title = 'Cliquer pour copier le numéro';
-      strong.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        copyText(prefixText);
-        strong.style.opacity = '0.6';
-        setTimeout(() => { strong.style.opacity = '1'; }, 700);
-      });
+      strong.addEventListener('click', (ev) => { ev.stopPropagation(); copyText(prefixText); strong.style.opacity = '0.6'; setTimeout(() => { strong.style.opacity = '1'; }, 700); });
       titleCombined.appendChild(strong);
     }
 
@@ -340,7 +260,6 @@
 
     nameRow.appendChild(titleCombined);
     info.appendChild(nameRow);
-    // -------------------------
 
     if(f.__isNewestForEpisode){
       const badge = document.createElement('span'); badge.className='badge-new'; badge.textContent='NOUVO'; badge.style.fontSize='11px'; badge.style.padding='4px 8px'; badge.style.marginLeft='8px';
@@ -359,7 +278,8 @@
     return card;
   }
 
-  // buildOrderedList (modified: seasons & episodes ordered by newest item first inside each group)
+  // buildOrderedList (modified: ensure items within each group are sorted by lastModified desc
+  // so newest pushes are processed first → appear at top inside the group)
   function buildOrderedList(files){
     const groups = new Map();
     (files||[]).forEach(f=>{
@@ -399,6 +319,10 @@
         for(const it of g.items) out.push(it);
         continue;
       }
+
+      // <-- ADDED: force items in this group to be sorted by lastModified desc
+      // so newest files are processed first and appear at top inside their season/ep group.
+      g.items.sort((a,b)=> toNum(b.lastModified) - toNum(a.lastModified));
 
       const parsed = g.items.map(it => ({ it, p: parseParts(it.name || '') }));
 
@@ -451,7 +375,6 @@
 
       for(const it of baseOnly) pushToSeason('base', it);
 
-      // --------- Modified sorting: order seasons by newest item (desc) so "dernier push" season appears first ----------
       const seasonKeys = Array.from(seasonMap.keys());
       const seasonNewest = new Map();
       for(const sk of seasonKeys){
@@ -467,7 +390,6 @@
         if(b === 'base') return -1;
         return Number(a) - Number(b);
       });
-      // ---------------------------------------------------------------------------------------------------------------
 
       for(const sk of seasonKeys){
         const items = seasonMap.get(sk) || [];
@@ -486,7 +408,6 @@
           epBuckets.set(epKey, arr);
         }
 
-        // --------- Modified sorting: order episodes by newest item (desc) so newest episodes appear at top ----------
         const epKeys = Array.from(epBuckets.keys());
         const epNewest = new Map();
         for(const ek of epKeys){
@@ -504,11 +425,9 @@
           if(b === 0 && a !== 0) return 1;
           return Number(a) - Number(b);
         });
-        // ---------------------------------------------------------------------------------------------------------------
 
         for(const ek of epKeys){
           const arr = epBuckets.get(ek) || [];
-          // keep existing behavior: newest file per episode flagged and shown first
           arr.sort((x,y)=> toNum(y.lastModified) - toNum(x.lastModified));
           arr.forEach((it, idx) => it.__isNewestForEpisode = (idx === 0));
           for(const it of arr) out.push(it);
@@ -522,10 +441,7 @@
   function copyText(text){
     if(!text) return;
     if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).catch(()=>{});
-    else{
-      const ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.left='-9999px'; document.body.appendChild(ta);
-      ta.select(); try{ document.execCommand('copy'); }catch(e){} ta.remove();
-    }
+    else{ const ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.left='-9999px'; document.body.appendChild(ta); ta.select(); try{ document.execCommand('copy'); }catch(e){} ta.remove(); }
   }
 
   function insertSoftBreaks(str,maxLen=40){
@@ -644,19 +560,9 @@
     } else listEl.appendChild(sentinel);
   }
 
-  function ensureSentinelObserver(){
-    if(sentinelObserver) return;
-    sentinelObserver = new IntersectionObserver(entries => { entries.forEach(e => { if(e.isIntersecting) {
-      if(CONFIG.AUTO_FLUSH_ON_SCROLL) flushSilentCache(CONFIG.FLUSH_BATCH_ON_SCROLL);
-      renderNextChunk();
-    } }); }, { root:null, rootMargin:'600px', threshold:0.01 });
-  }
+  function ensureSentinelObserver(){ if(sentinelObserver) return; sentinelObserver = new IntersectionObserver(entries => { entries.forEach(e => { if(e.isIntersecting) { if(CONFIG.AUTO_FLUSH_ON_SCROLL) flushSilentCache(CONFIG.FLUSH_BATCH_ON_SCROLL); renderNextChunk(); } }); }, { root:null, rootMargin:'600px', threshold:0.01 }); }
 
-  function updateEmpty(){
-    const empty = document.getElementById('emptyMessage');
-    const len = (window.viewFiles && window.viewFiles.length) ? window.viewFiles.filter(x=>!x.__groupHeader).length : buildOrderedList(window.allFiles||[]).filter(x=>!x.__groupHeader).length;
-    empty.style.display = (len === 0) ? 'block' : 'none';
-  }
+  function updateEmpty(){ const empty = document.getElementById('emptyMessage'); const len = (window.viewFiles && window.viewFiles.length) ? window.viewFiles.filter(x=>!x.__groupHeader).length : buildOrderedList(window.allFiles||[]).filter(x=>!x.__groupHeader).length; empty.style.display = (len === 0) ? 'block' : 'none'; }
 
   function fullRerender(){ renderedCount = 0; document.getElementById('fileList').innerHTML = ''; renderNextChunk(); }
 
