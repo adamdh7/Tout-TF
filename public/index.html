@@ -94,17 +94,13 @@
     return s.replace(/\s+/g,' ').trim().toLowerCase();
   }
 
-  // stronger canonical base for grouping similar names together
   function canonicalBase(name){
     if(!name) return '';
     let s = (name || '').replace(/\.[^.]+$/,'');
     try { s = s.normalize('NFKD').replace(/[\u0300-\u036f]/g,''); } catch(e){}
     s = s.toLowerCase();
-    // remove tokens that break grouping
     s = s.replace(/\b(film|saison|season|ep|episode|temporada|temp|vostfr|vost|vf|dub|sub)\b/gi,' ');
-    // remove standalone numbers (episode ids etc)
     s = s.replace(/\b\d{1,6}\b/g,' ');
-    // remove punctuation, keep alphanum and spaces
     s = s.replace(/[^a-z0-9]+/g,' ').trim();
     s = s.replace(/\s+/g,' ');
     return s;
@@ -366,7 +362,7 @@
     return card;
   }
 
-  // buildOrderedList: use canonicalBase for grouping; seasons asc; episodes asc; newest marked per-episode
+  // buildOrderedList: groups by canonicalBase; PROMOTE newest file(s) per group directly under header
   function buildOrderedList(files){
     const groups = new Map();
     (files||[]).forEach(f=>{
@@ -393,7 +389,7 @@
       return { base, items, newest };
     });
 
-    // groups sorted by newest activity (desc)
+    // groups: newest group first
     groupArr.sort((g1,g2) => {
       const a = toNum(g2.newest) - toNum(g1.newest);
       if(a !== 0) return a;
@@ -408,10 +404,30 @@
         continue;
       }
 
-      // ensure consistent order for group processing
+      // sort items by newest first for consistent processing
       g.items.sort((a,b)=> toNum(b.lastModified) - toNum(a.lastModified));
 
-      const parsed = g.items.map(it => ({ it, p: parseParts(it.name || '') }));
+      // === PROMOTE newest file(s) for this group ===
+      // choose files whose lastModified == group's newest (could be multiple)
+      const groupNewestTs = toNum(g.newest);
+      const promoted = (g.items || []).filter(it => !isImageFile(it.url||it.name) && toNum(it.lastModified) === groupNewestTs);
+
+      // mark promoted and avoid duplicating them later
+      const promotedSet = new Set(promoted.map(p => p.url || p.name));
+
+      // push group header
+      out.push({ __groupHeader:true, base:g.base, newest:g.newest });
+
+      // push promoted files immediately after group header (most recent first)
+      promoted.sort((a,b)=> toNum(b.lastModified) - toNum(a.lastModified));
+      promoted.forEach(p => {
+        p.__isNewestForEpisode = true; // mark as newest for its episode (visible badge)
+        out.push(p);
+      });
+      // === end promote ===
+
+      // continue normal grouping but skip promoted files
+      const parsed = g.items.filter(it => !promotedSet.has(it.url || it.name)).map(it => ({ it, p: parseParts(it.name || '') }));
 
       const explicitSeason = parsed.filter(x => x.p.hasSeason || x.p.hasEp).map(x=>x.it);
       const numericItems = parsed.filter(x => !(x.p.hasSeason || x.p.hasEp) && x.p.numericToken != null);
@@ -440,8 +456,6 @@
         }
       }
 
-      out.push({ __groupHeader:true, base:g.base, newest:g.newest });
-
       const seasonMap = new Map();
       function pushToSeason(sKey, item){ const arr = seasonMap.get(sKey) || []; arr.push(item); seasonMap.set(sKey, arr); }
 
@@ -462,7 +476,6 @@
 
       for(const it of baseOnly) pushToSeason('base', it);
 
-      // seasons numeric asc, base last
       const seasonKeys = Array.from(seasonMap.keys()).sort((a,b) => {
         if(a === 'base') return 1;
         if(b === 'base') return -1;
@@ -486,7 +499,6 @@
           epBuckets.set(epKey, arr);
         }
 
-        // episodes numeric asc, 'base' last
         const epKeys = Array.from(epBuckets.keys()).sort((a,b) => {
           if(a === 'base') return 1;
           if(b === 'base') return -1;
@@ -497,7 +509,7 @@
 
         for(const ek of epKeys){
           const arr = epBuckets.get(ek) || [];
-          // within each episode, sort older -> newer so newest is last (badge will mark it)
+          // within each episode, older -> newer so newest is last
           arr.sort((x,y)=> toNum(x.lastModified) - toNum(y.lastModified));
           arr.forEach((it, idx) => it.__isNewestForEpisode = (idx === arr.length - 1));
           for(const it of arr) out.push(it);
@@ -527,7 +539,6 @@
     });
   }
 
-  // copyGroup now uses canonicalBase matching (so "Name ep1" & "Name ep2" are grouped)
   function copyGroup(baseKey){
     if(!baseKey) return;
     const files = (window.allFiles||[]).filter(f=>{
