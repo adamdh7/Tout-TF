@@ -51,14 +51,11 @@
       <button id="showNewBtn" class="show-btn" style="display:none">Afficher</button>
     </div>
   </header>
-
   <div class="search-bar">
     <input id="searchInput" type="text" placeholder="Rechercher par nom, épisode, season, URL..." />
   </div>
-
   <div id="fileList" class="container"></div>
   <div id="emptyMessage" class="empty" style="display:none">Aucun fichier trouvé.</div>
-
 <script>
 (() => {
   const CONFIG = {
@@ -94,23 +91,6 @@
     return s.replace(/\s+/g,' ').trim().toLowerCase();
   }
 
-  function canonicalBase(name){
-    if(!name) return '';
-    let s = (name || '').replace(/\.[^.]+$/,'');
-    try { s = s.normalize('NFKD').replace(/[\u0300-\u036f]/g,''); } catch(e){}
-    s = s.toLowerCase();
-    s = s.replace(/\b(film|saison|season|ep|episode|temporada|temp|vostfr|vost|vf|dub|sub)\b/gi,' ');
-    s = s.replace(/\b\d{1,6}\b/g,' ');
-    s = s.replace(/[^a-z0-9]+/g,' ').trim();
-    s = s.replace(/\s+/g,' ');
-    return s;
-  }
-
-  function prettyFromCanonical(s){
-    if(!s) return '(sans nom)';
-    return s.replace(/[_\-\s]+/g,' ').split(' ').map(w => w ? (w[0].toUpperCase()+w.slice(1)) : '').join(' ').trim() || '(sans nom)';
-  }
-
   function getPathnameFromUrlOrName(uOrName) {
     if (!uOrName) return '';
     try {
@@ -132,14 +112,14 @@
 
   function removeBracketed(s){
     if(!s) return s;
-    return s.replace(/[\(\{][^\)\}]*[\]\)\}]/g,'').replace(/\s+/g,' ').trim();
+    return s.replace(/[\{][^\}]*[\]\)\}]/g,'').replace(/\s+/g,' ').trim();
   }
 
   function stripPrefixes(noExt){
     if(!noExt) return '';
     let s = noExt;
     s = s.replace(/^[0-9]{6,}[_\-]*/,'');
-    s = s.replace(/^[\{\[][^)\}]*[\)\]\}][_-\s]*/,'');
+    s = s.replace(/^[\{][^)\}]*[\]\}][_\-\s]*/,'');
     s = s.replace(/^@[^_\-\s]+[_\-\s]*/g,'').replace(/^[_\-]+@[^_\-\s]+[_\-\s]*/g,'');
     s = s.replace(/[_\-\.\s]+/g,' ');
     s = s.replace(/\s+/g,' ').trim();
@@ -238,7 +218,7 @@
   function createGroupHeader(f){
     const head = document.createElement('div'); head.className = 'group-head';
     const left = document.createElement('div'); left.className = 'group-title';
-    const pretty = prettyFromCanonical(f.base || '');
+    const pretty = (f.base || '(sans nom)').replace(/[_\-\s]+/g,' ').trim();
     left.textContent = pretty;
     head.appendChild(left);
     const rightWrap = document.createElement('div'); rightWrap.style.display='flex'; rightWrap.style.gap='8px'; rightWrap.style.alignItems='center';
@@ -310,6 +290,7 @@
     nameRow.style.flexWrap = 'wrap';
 
     const p = parseParts(f.name || '');
+
     const prefixText = p.leadingNumeric || (() => {
       const m = (f.name || '').match(/(^|\s)(\d{3,})/);
       return m ? m[2] : null;
@@ -362,7 +343,6 @@
     return card;
   }
 
-  // buildOrderedList: groups by canonicalBase; PROMOTE newest file(s) per group directly under header
   function buildOrderedList(files){
     const groups = new Map();
     (files||[]).forEach(f=>{
@@ -374,7 +354,7 @@
           groups.get(imgKey).push(f);
           return;
         }
-        const baseKey = canonicalBase(f.name || '');
+        const baseKey = (p && p.base) ? p.base : normalizeString((f.name||'').replace(/\.[^.]+$/,'')) || (f.name||'').replace(/\.[^.]+$/,'');
         if(!groups.has(baseKey)) groups.set(baseKey,[]);
         groups.get(baseKey).push(f);
       } catch(e) {
@@ -386,11 +366,16 @@
 
     const groupArr = Array.from(groups.entries()).map(([base,items]) => {
       const newest = items.reduce((m,it) => Math.max(m,toNum(it.lastModified)),0);
-      return { base, items, newest };
+      const serverIndex = items.reduce((m,it) => Math.min(m, (typeof it.__serverIndex === 'number' ? it.__serverIndex : 9999999)), 9999999);
+      return { base, items, newest, serverIndex };
     });
 
-    // groups: newest group first
     groupArr.sort((g1,g2) => {
+      const aHas = g1.serverIndex !== 9999999;
+      const bHas = g2.serverIndex !== 9999999;
+      if(aHas && bHas){
+        return g1.serverIndex - g2.serverIndex; // preserve server order when available
+      }
       const a = toNum(g2.newest) - toNum(g1.newest);
       if(a !== 0) return a;
       return collator.compare(g1.base, g2.base);
@@ -404,30 +389,7 @@
         continue;
       }
 
-      // sort items by newest first for consistent processing
-      g.items.sort((a,b)=> toNum(b.lastModified) - toNum(a.lastModified));
-
-      // === PROMOTE newest file(s) for this group ===
-      // choose files whose lastModified == group's newest (could be multiple)
-      const groupNewestTs = toNum(g.newest);
-      const promoted = (g.items || []).filter(it => !isImageFile(it.url||it.name) && toNum(it.lastModified) === groupNewestTs);
-
-      // mark promoted and avoid duplicating them later
-      const promotedSet = new Set(promoted.map(p => p.url || p.name));
-
-      // push group header
-      out.push({ __groupHeader:true, base:g.base, newest:g.newest });
-
-      // push promoted files immediately after group header (most recent first)
-      promoted.sort((a,b)=> toNum(b.lastModified) - toNum(a.lastModified));
-      promoted.forEach(p => {
-        p.__isNewestForEpisode = true; // mark as newest for its episode (visible badge)
-        out.push(p);
-      });
-      // === end promote ===
-
-      // continue normal grouping but skip promoted files
-      const parsed = g.items.filter(it => !promotedSet.has(it.url || it.name)).map(it => ({ it, p: parseParts(it.name || '') }));
+      const parsed = g.items.map(it => ({ it, p: parseParts(it.name || '') }));
 
       const explicitSeason = parsed.filter(x => x.p.hasSeason || x.p.hasEp).map(x=>x.it);
       const numericItems = parsed.filter(x => !(x.p.hasSeason || x.p.hasEp) && x.p.numericToken != null);
@@ -455,6 +417,8 @@
           }
         }
       }
+
+      out.push({ __groupHeader:true, base:g.base, newest:g.newest });
 
       const seasonMap = new Map();
       function pushToSeason(sKey, item){ const arr = seasonMap.get(sKey) || []; arr.push(item); seasonMap.set(sKey, arr); }
@@ -486,6 +450,7 @@
         const items = seasonMap.get(sk) || [];
         out.push({ __seasonHeader:true, season: sk, seasonLabel: (sk === 'base' ? 'Base' : ('Saison ' + sk)), note:'' });
 
+        // group by episode key
         const epBuckets = new Map();
         for(const it of items){
           const p = parseParts(it.name || '');
@@ -499,19 +464,19 @@
           epBuckets.set(epKey, arr);
         }
 
-        const epKeys = Array.from(epBuckets.keys()).sort((a,b) => {
+        const epKeys = Array.from(epBuckets.keys()).sort((a,b)=>{
           if(a === 'base') return 1;
           if(b === 'base') return -1;
           if(a === 0 && b !== 0) return -1;
           if(b === 0 && a !== 0) return 1;
-          return Number(a) - Number(b);
+          return Number(a) - Number(b); // ensures ep 1,2,3... order
         });
 
         for(const ek of epKeys){
           const arr = epBuckets.get(ek) || [];
-          // within each episode, older -> newer so newest is last
-          arr.sort((x,y)=> toNum(x.lastModified) - toNum(y.lastModified));
-          arr.forEach((it, idx) => it.__isNewestForEpisode = (idx === arr.length - 1));
+          // for multiple files for same episode: show newest first, but episode ordering is handled by epKeys
+          arr.sort((x,y)=> toNum(y.lastModified) - toNum(x.lastModified));
+          arr.forEach((it, idx) => it.__isNewestForEpisode = (idx === 0));
           for(const it of arr) out.push(it);
         }
       }
@@ -542,7 +507,7 @@
   function copyGroup(baseKey){
     if(!baseKey) return;
     const files = (window.allFiles||[]).filter(f=>{
-      try{ return canonicalBase(f.name||'') === baseKey; } catch(e){ return false; }
+      try{ return parseParts(f.name||'').base === baseKey; } catch(e){ return false; }
     }).filter(f=>f.url);
     if(!files.length){ copyText(`Aucun fichier trouvé pour: ${baseKey}`); return; }
 
@@ -591,14 +556,14 @@
     });
 
     let out = '';
-    const prettyBase = prettyFromCanonical(baseKey);
+    const prettyBase = (baseKey || '(sans nom)').replace(/[_\-\s]+/g,' ').trim();
     for(const sk of seasonKeys){
       const arr = seasonMap.get(sk) || [];
       arr.sort((a,b) => {
         const pa = parseParts(a.name||''), pb = parseParts(b.name||'');
         const ea = pa.ep != null ? Number(pa.ep) : (a.__displayEp != null ? Number(a.__displayEp) : 999999);
         const eb = pb.ep != null ? Number(pb.ep) : (b.__displayEp != null ? Number(b.__displayEp) : 999999);
-        if(ea !== eb) return ea - eb;
+        if(ea !== eb) return ea - eb; // ensure episode order when copying
         return toNum(b.lastModified) - toNum(a.lastModified);
       });
       for(const f of arr){
@@ -680,10 +645,20 @@
     try{
       const res = await fetch(CONFIG.FILES_PATH, { cache:'no-store' });
       if(!res.ok) throw new Error('fetch failed');
-      const files = await res.json();
-      const normalized = (files||[]).map(f => ({ name:f.name, url:f.url, size:toNum(f.size), lastModified:toNum(f.lastModified), thumbnail:f.thumbnail||null }));
+      const filesRaw = await res.json();
+
+      // attach server index so frontend can preserve server ordering when available
+      const files = (filesRaw || []).map((f, idx) => ({
+        name: f.name,
+        url: f.url,
+        size: toNum(f.size),
+        lastModified: toNum(f.lastModified),
+        thumbnail: f.thumbnail || null,
+        __serverIndex: idx
+      }));
+
       const seen = new Set(), unique = [];
-      for(const it of normalized){ if(!it.url) continue; if(!seen.has(it.url)){ seen.add(it.url); unique.push(it); } }
+      for(const it of files){ if(!it.url) continue; if(!seen.has(it.url)){ seen.add(it.url); unique.push(it); } }
       window.allFiles = unique.slice(0, CONFIG.METADATA_CAP);
       fullRerender();
     }catch(e){ console.error(e); }
@@ -691,10 +666,11 @@
 
   function handleServerMsg(msg){
     if(!msg || !msg.type) return;
-    const normFile = f => ({ name:f.name, url:f.url, size: toNum(f.size), lastModified: toNum(f.lastModified), thumbnail: f.thumbnail || null });
+    const normFile = f => ({ name:f.name, url:f.url, size: toNum(f.size), lastModified: toNum(f.lastModified), thumbnail: f.thumbnail || null, __serverIndex: (typeof f.__serverIndex === 'number' ? f.__serverIndex : undefined) });
 
     if(msg.type === 'full' && Array.isArray(msg.files)){
-      const arr = msg.files.map(normFile);
+      // attach serverIndex based on order in the full payload
+      const arr = msg.files.map((f, idx) => { const nf = normFile(f); nf.__serverIndex = idx; return nf; });
       const seen = new Set(), unique = [];
       for(const it of arr){ if(!it.url) continue; if(!seen.has(it.url)){ seen.add(it.url); unique.push(it); } }
       window.allFiles = unique.slice(0, CONFIG.METADATA_CAP);
@@ -771,7 +747,7 @@
       fetch(CONFIG.FILES_PATH, { cache:'no-store' })
         .then(res => res.ok ? res.json() : Promise.reject('err'))
         .then(files => {
-          const arr = (files||[]).map(f=>({ name:f.name, url:f.url, size:toNum(f.size), lastModified: toNum(f.lastModified), thumbnail:f.thumbnail||null }));
+          const arr = (files||[]).map((f, idx) => ({ name:f.name, url:f.url, size:toNum(f.size), lastModified: toNum(f.lastModified), thumbnail:f.thumbnail||null, __serverIndex: idx }));
           const seen = new Set(), unique = [];
           for(const it of arr){ if(!it.url) continue; if(!seen.has(it.url)){ seen.add(it.url); unique.push(it); } }
           window.allFiles = unique.slice(0, CONFIG.METADATA_CAP);
@@ -846,4 +822,4 @@
 })();
 </script>
 </body>
-  </html>
+</html>
