@@ -10,7 +10,7 @@
     header{display:flex;align-items:center;justify-content:center;padding:12px 16px;font-size:18px;font-weight:700;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,0.05);position:sticky;top:0;z-index:20}
     .header-controls{position:absolute;right:16px;top:50%;transform:translateY(-50%);display:flex;gap:8px;align-items:center}
     .title{display:flex;gap:12px;align-items:center}
-    .badge-new{background:#ef4444;color:#fff;padding:6px 10px;border-radius:999px;font-weight:700;font-size:13px;margin-left:8px}
+    .badge-new{background:#ef4444;color:#fff;padding:6px 10px;border-radius:999px;font-weight:700;font-size:13px}
     .show-btn{background:#111827;color:#fff;border-radius:8px;padding:6px 10px;border:none;cursor:pointer}
     .search-bar{margin:12px;display:flex;justify-content:center}
     input{width:90%;max-width:700px;padding:10px 14px;border-radius:12px;border:1px solid #ddd;font-size:16px;outline:none}
@@ -33,44 +33,10 @@
     .empty{text-align:center;color:#888;margin-top:40px}
     .copy-all-btn{padding:6px 10px;font-size:13px;background:#111827;color:#fff;border-radius:8px;border:none;cursor:pointer}
     .copy-all-btn.copied{background:#10b981}
+    .badge-new{margin-left:8px}
     #fileList{min-height:120px}
+    html,body{touch-action:pan-y;-ms-touch-action:pan-y}
   </style>
-  <script>
-    (function () {
-      document.addEventListener('touchstart', function (e) {
-        if (e.touches && e.touches.length > 1) e.preventDefault();
-      }, { passive: false });
-
-      let lastTouchEnd = 0;
-      document.addEventListener('touchend', function (e) {
-        const now = Date.now();
-        if (now - lastTouchEnd <= 300) e.preventDefault();
-        lastTouchEnd = now;
-      }, { passive: false });
-
-      document.addEventListener('gesturestart', function (e) {
-        if (e && e.preventDefault) e.preventDefault();
-      });
-
-      window.addEventListener('wheel', function (e) {
-        if (e.ctrlKey || e.metaKey) e.preventDefault();
-      }, { passive: false });
-
-      window.addEventListener('keydown', function (e) {
-        const isCtrl = e.ctrlKey || e.metaKey;
-        if (!isCtrl) return;
-        const k = e.key;
-        if (k === '+' || k === '=' || k === '-' || k === '0') {
-          e.preventDefault();
-          e.stopPropagation();
-        }
-      }, { passive: false });
-
-      document.addEventListener('dblclick', function (e) {
-        e.preventDefault();
-      }, { passive: false });
-    })();
-  </script>
 </head>
 <body>
   <header>
@@ -80,16 +46,13 @@
       <button id="showNewBtn" class="show-btn" style="display:none">Afficher</button>
     </div>
   </header>
-
   <div class="search-bar">
     <input id="searchInput" type="text" placeholder="Rechercher par nom, épisode, season, URL..." />
   </div>
-
   <div id="fileList" class="container"></div>
   <div id="emptyMessage" class="empty" style="display:none">Aucun fichier trouvé.</div>
-
   <script>
-(function(){
+(() => {
   const CONFIG = {
     FILES_PATH: '/files',
     WS_PATH: (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws',
@@ -99,6 +62,9 @@
     CHUNK_SIZE: 50,
     MAX_RENDER: 1200,
     METADATA_CAP: 30000,
+    FLUSH_BATCH_ON_SCROLL: 4,
+    AUTO_FLUSH_ON_SCROLL: true,
+    SILENT_FLUSH_INTERVAL_MS: 5000,
     MAX_VIDEOS_RENDER: 8
   };
 
@@ -112,39 +78,41 @@
   let renderedCount = 0;
   let sentinelObserver = null;
 
-  function normalizeString(s){
-    if(!s) return '';
-    try{ s = s.normalize('NFKD').replace(/[\u0300-\u036f]/g,''); }catch(e){}
-    try{ s = s.replace(/[^\p{L}\p{N}]+/gu,' '); }catch(e){ s = s.replace(/[^A-Za-z0-9]+/g,' '); }
+  function normalizeString(s) {
+    if (!s) return '';
+    try { s = s.normalize('NFKD').replace(/[\u0300-\u036f]/g,''); } catch(e){}
+    try { s = s.replace(/[^\p{L}\p{N}]+/gu,' '); } catch(e) { s = s.replace(/[^A-Za-z0-9]+/g,' '); }
     return s.replace(/\s+/g,' ').trim().toLowerCase();
   }
 
-  function getPathnameFromUrlOrName(uOrName){
-    if(!uOrName) return '';
-    try{ const tmp = new URL(uOrName, location.origin); return tmp.pathname || uOrName; }catch(e){ return (uOrName.split('?')[0]).split('#')[0]; }
+  function getPathnameFromUrlOrName(uOrName) {
+    if (!uOrName) return '';
+    try {
+      const tmp = new URL(uOrName, location.origin);
+      return tmp.pathname || uOrName;
+    } catch(e){
+      return (uOrName.split('?')[0]).split('#')[0];
+    }
   }
 
-  function isImageFile(nameOrUrl){
+  function isImageFile(nameOrUrl) {
     const path = getPathnameFromUrlOrName(nameOrUrl).toLowerCase();
     return !!path.match(/\.(jpg|jpeg|png|gif|webp|bmp|heic)(?:$)/i);
   }
-  function isVideoFile(nameOrUrl){
+  function isVideoFile(nameOrUrl) {
     const path = getPathnameFromUrlOrName(nameOrUrl).toLowerCase();
     return !!path.match(/\.(mp4|mov|webm|m4v|mkv)(?:$)/i);
   }
 
-  function removeBracketed(s){
-    if(!s) return s;
-    return s.replace(/\[[^\]]*\]|\([^\)]*\)|\{[^\}]*\}/g,'').replace(/\s+/g,' ').trim();
-  }
+  function removeBracketed(s){ if(!s) return s; return s.replace(/[\{][^\}]*[\]\)\}]/g,'').replace(/\s+/g,' ').trim(); }
 
   function parseParts(name){
     const noExt = (name||'').replace(/\.[^.]+$/,'');
     let rawNorm = removeBracketed(noExt).replace(/[_\-\.\s]+/g,' ').replace(/\s+/g,' ').trim();
     let leadingNumeric = null;
     const mLead = rawNorm.match(/^(\d{4,}|\d{6,})[-_\s]*/);
-    if(mLead){ leadingNumeric = mLead[1].replace(/[-_\s]/g,''); rawNorm = rawNorm.replace(new RegExp('^' + mLead[0].replace(/([.*+?^=!:${}()|[\\]/\\])/g,'\\$1')), '').trim(); }
-    else { const m2 = rawNorm.match(/^(\d{4,})[-_\s]+/); if(m2){ leadingNumeric = m2[1]; rawNorm = rawNorm.replace(new RegExp('^' + m2[0].replace(/([.*+?^=!:${}()|[\\]/\\])/g,'\\$1')), '').trim(); } }
+    if(mLead){ leadingNumeric = mLead[1].replace(/[-_\s]/g,''); rawNorm = rawNorm.replace(new RegExp('^' + mLead[0].replace(/([.*+?^=!:${}()|[\]/\\])/g,'\\$1')), '').trim(); }
+    else { const m2 = rawNorm.match(/^(\d{4,})[-_\s]+/); if(m2){ leadingNumeric = m2[1]; rawNorm = rawNorm.replace(new RegExp('^' + m2[0].replace(/([.*+?^=!:${}()|[\]/\\])/g,'\\$1')), '').trim(); } }
 
     let season = null, ep = null, hasSeason=false, hasEp=false;
     let m;
@@ -174,17 +142,37 @@
     return { base, season: (season != null) ? toNum(season) : null, ep: (ep != null) ? toNum(ep) : null, numericToken: (numericToken != null) ? Number(numericToken) : null, leadingNumeric: leadingNumeric, hasSeason: !!hasSeason, hasEp: !!hasEp, raw: rawNorm };
   }
 
+  function intraGroupCompare(a,b){
+    const pa = parseParts(a.name||''), pb = parseParts(b.name||'');
+    const aIsBaseOnly = (!pa.hasEp && pa.ep==null) && (!pa.hasSeason && pa.season==null);
+    const bIsBaseOnly = (!pb.hasEp && pb.ep==null) && (!pb.hasSeason && pb.season==null);
+    if(aIsBaseOnly && !bIsBaseOnly) return 1;
+    if(bIsBaseOnly && !aIsBaseOnly) return -1;
+    const sa = pa.season!=null ? toNum(pa.season) : (pa.hasEp ? 1 : 0);
+    const sb = pb.season!=null ? toNum(pb.season) : (pb.hasEp ? 1 : 0);
+    const ea = pa.ep!=null ? toNum(pa.ep) : (pa.hasSeason ? 0 : 999999);
+    const eb = pb.ep!=null ? toNum(pb.ep) : (pb.hasSeason ? 0 : 999999);
+    if(sa !== sb) return sa - sb;
+    if(ea !== eb) return ea - eb;
+    const lmA = toNum(a.lastModified), lmB = toNum(b.lastModified);
+    if(lmA !== lmB) return lmB - lmA;
+    const aNoExt = (a.name||'').replace(/\.[^.]+$/,'');
+    const bNoExt = (b.name||'').replace(/\.[^.]+$/,'');
+    return collator.compare(aNoExt,bNoExt);
+  }
+
   function createGroupHeader(f){
     const head = document.createElement('div'); head.className = 'group-head';
-    try{ head.dataset.base = f.base || ''; }catch(e){}
+    try { head.dataset.base = f.base || ''; } catch(e){}
     const left = document.createElement('div'); left.className = 'group-title';
-    left.textContent = (f.base || '(sans nom)').replace(/[_\-\s]+/g,' ').trim();
+    const pretty = (f.base || '(sans nom)').replace(/[_\-\s]+/g,' ').trim();
+    left.textContent = pretty;
     head.appendChild(left);
     const rightWrap = document.createElement('div'); rightWrap.style.display='flex'; rightWrap.style.gap='8px'; rightWrap.style.alignItems='center';
     const right = document.createElement('div'); right.style.fontSize='13px'; right.style.color='#555'; right.style.whiteSpace='nowrap'; right.textContent = f.newest ? ('Dernier upload : ' + new Date(Number(f.newest)).toLocaleString()) : '';
     rightWrap.appendChild(right);
     const copyAllBtn = document.createElement('button'); copyAllBtn.className='copy-all-btn'; copyAllBtn.title='Copier tout'; copyAllBtn.innerHTML = 'Copier tout';
-    copyAllBtn.addEventListener('click', (ev) => { ev.stopPropagation(); try{ copyGroup(f.base); }catch(e){} copyAllBtn.classList.add('copied'); setTimeout(()=>copyAllBtn.classList.remove('copied'),1200); });
+    copyAllBtn.addEventListener('click', (ev) => { ev.stopPropagation(); try{ copyGroup(f.base); } catch(e){ console.error(e); } copyAllBtn.classList.add('copied'); setTimeout(()=>copyAllBtn.classList.remove('copied'),1200); });
     rightWrap.appendChild(copyAllBtn);
     head.appendChild(rightWrap);
     return head;
@@ -192,7 +180,7 @@
 
   function createSeasonHeader(obj){
     const head = document.createElement('div'); head.className = 'season-head';
-    try{ head.dataset.season = String(obj.season); }catch(e){}
+    try { head.dataset.season = String(obj.season); } catch(e){}
     const left = document.createElement('div'); left.className = 'season-title';
     left.textContent = obj.seasonLabel || (obj.season === 'base' ? 'Base' : ('Saison ' + obj.season));
     head.appendChild(left);
@@ -237,7 +225,7 @@
       const div = document.createElement('div'); div.className='thumb'; div.style.display='flex'; div.style.alignItems='center'; div.style.justifyContent='center'; div.style.color='#999'; div.textContent='Pas d’aperçu'; preview = div;
     }
 
-    try{ preview.dataset.url = f.url || (f.name || ''); }catch(e){}
+    try { preview.dataset.url = f.url || (f.name || ''); } catch(e){}
     const info = document.createElement('div'); info.className='info';
 
     const nameRow = document.createElement('div');
@@ -287,10 +275,7 @@
       nameRow.appendChild(badge);
     }
 
-    const metaDiv = document.createElement('div'); metaDiv.className='meta';
-    const sizeMB = ((toNum(f.size)||0)/1048576).toFixed(1);
-    const lm = f.lastModified ? new Date(Number(f.lastModified)).toLocaleString() : '-';
-    metaDiv.textContent = `${sizeMB} MB • ${lm}`;
+    const metaDiv = document.createElement('div'); metaDiv.className='meta'; const sizeMB = ((toNum(f.size)||0)/1048576).toFixed(1); const lm = f.lastModified ? new Date(Number(f.lastModified)).toLocaleString() : '-'; metaDiv.textContent = `${sizeMB} MB • ${lm}`;
     const actions = document.createElement('div'); actions.className='actions';
     const copyBtn = document.createElement('button'); copyBtn.className='small-btn'; copyBtn.textContent='Copier URL'; copyBtn.addEventListener('click', ()=>copyUrl(f.url));
     const openA = document.createElement('a'); openA.href = f.url; openA.target = '_blank';
@@ -300,32 +285,32 @@
     info.appendChild(metaDiv); info.appendChild(actions); info.appendChild(urlSpan);
     card.appendChild(preview); card.appendChild(info);
 
-    try{ card.dataset.url = f.url || (f.name || ''); }catch(e){}
+    try { card.dataset.url = f.url || (f.name || ''); } catch(e){}
     return card;
   }
 
   function buildOrderedList(files){
     const groups = new Map();
     (files||[]).forEach(f=>{
-      try{
+      try {
         const p = parseParts(f.name||'');
         const baseKey = (p && p.base) ? p.base : normalizeString((f.name||'').replace(/\.[^.]+$/,'')) || (f.name||'').replace(/\.[^.]+$/,'');
         if(!groups.has(baseKey)) groups.set(baseKey,[]);
         groups.get(baseKey).push(f);
-      }catch(e){
+      } catch(e) {
         const fallback = (f.name||'').replace(/\.[^.]+$/,'');
         if(!groups.has(fallback)) groups.set(fallback,[]);
         groups.get(fallback).push(f);
       }
     });
 
-    const groupArr = Array.from(groups.entries()).map(([base,items])=>{
-      const newest = items.reduce((m,it)=>Math.max(m,toNum(it.lastModified)),0);
-      const serverIndex = items.reduce((m,it)=>Math.min(m, (typeof it.__serverIndex === 'number' ? it.__serverIndex : 9999999)), 9999999);
+    const groupArr = Array.from(groups.entries()).map(([base,items]) => {
+      const newest = items.reduce((m,it) => Math.max(m,toNum(it.lastModified)),0);
+      const serverIndex = items.reduce((m,it) => Math.min(m, (typeof it.__serverIndex === 'number' ? it.__serverIndex : 9999999)), 9999999);
       return { base, items, newest, serverIndex };
     });
 
-    groupArr.sort((g1,g2)=>{
+    groupArr.sort((g1,g2) => {
       const aHas = g1.serverIndex !== 9999999;
       const bHas = g2.serverIndex !== 9999999;
       if(aHas && bHas) return g1.serverIndex - g2.serverIndex;
@@ -337,6 +322,7 @@
     const out = [];
     for(const g of groupArr){
       const parsed = g.items.map(it => ({ it, p: parseParts(it.name || '') }));
+
       const explicitSeason = parsed.filter(x => x.p.hasSeason || x.p.hasEp).map(x=>x.it);
       const numericItems = parsed.filter(x => !(x.p.hasSeason || x.p.hasEp) && x.p.numericToken != null);
       const baseOnly = parsed.filter(x => !(x.p.hasSeason || x.p.hasEp) && x.p.numericToken == null).map(x=>x.it);
@@ -350,7 +336,7 @@
 
       const synthesized = [];
       for(const [numKey, arr] of numMap.entries()){
-        arr.sort((a,b)=> toNum(a.it.lastModified) - toNum(b.it.lastModified));
+        arr.sort((a,b) => toNum(a.it.lastModified) - toNum(b.it.lastModified));
         if(arr.length === 1){
           const item = arr[0].it;
           item.__synth = { season: 1, ep: Number(numKey) };
@@ -386,7 +372,7 @@
 
       for(const it of baseOnly) pushToSeason('base', it);
 
-      const seasonKeys = Array.from(seasonMap.keys()).sort((a,b)=>{
+      const seasonKeys = Array.from(seasonMap.keys()).sort((a,b) => {
         if(a === 'base') return 1;
         if(b === 'base') return -1;
         return Number(a) - Number(b);
@@ -458,11 +444,11 @@
 
   function snapshotVideosInNodes(nodes){
     const map = new Map();
-    try{
-      nodes.forEach(node=>{
+    try {
+      nodes.forEach(node => {
         if(!node) return;
-        node.querySelectorAll && node.querySelectorAll('video').forEach(v=>{
-          try{
+        node.querySelectorAll && node.querySelectorAll('video').forEach(v => {
+          try {
             if(!v.paused && !v.ended){
               const src = v.currentSrc || v.src || (v.dataset && v.dataset.url) || '';
               if(src){
@@ -470,35 +456,37 @@
                 map.set(src, v);
               }
             }
-          }catch(e){}
+          } catch(e){}
         });
       });
-    }catch(e){}
+    } catch(e){}
     return map;
   }
 
   function restoreVideosToFragment(container, preservedMap){
     if(!preservedMap || !preservedMap.size) return;
-    try{
+    try {
       const candidates = Array.from(container.querySelectorAll('[data-url]'));
       for(const [src, videoEl] of preservedMap.entries()){
-        try{
+        try {
           let found = candidates.find(c => (c.dataset && c.dataset.url) === src);
           if(found && found.parentElement){
             videoEl.className = videoEl.className || 'thumb';
             videoEl.controls = true;
             videoEl.setAttribute('playsinline','');
             found.parentElement.replaceChild(videoEl, found);
+          } else {
           }
-        }catch(e){}
+        } catch(e){}
       }
-    }catch(e){}
+    } catch(e){}
   }
 
   function replaceGroupDOM(baseKey){
     if(!baseKey) return;
     const listEl = document.getElementById('fileList');
     const children = Array.from(listEl.children);
+
     let startIdx = -1, endIdx = children.length;
     for(let i=0;i<children.length;i++){
       const ch = children[i];
@@ -543,6 +531,7 @@
 
     const existingNodes = (startIdx !== -1) ? children.slice(startIdx, endIdx) : [];
     const preserved = snapshotVideosInNodes(existingNodes);
+
     const wrapper = document.createElement('div'); wrapper.appendChild(frag);
     restoreVideosToFragment(wrapper, preserved);
 
@@ -576,14 +565,19 @@
   function applyIncrementalFile(file){
     if(!file || !file.url) return;
     const nf = { name:file.name, url:file.url, size: toNum(file.size), lastModified: toNum(file.lastModified), thumbnail: file.thumbnail || null, __serverIndex: (typeof file.__serverIndex === 'number' ? file.__serverIndex : undefined) };
+
     window.allFiles = (window.allFiles || []).filter(x => x.url !== nf.url);
+
     window.allFiles.push(nf);
+
     const seen = new Set(), uniq = [];
     for(const it of window.allFiles){ if(!it || !it.url) continue; if(seen.has(it.url)) continue; seen.add(it.url); uniq.push(it); }
     window.allFiles = uniq;
+
     const orderedWithHeaders = buildOrderedList(window.allFiles || []);
     const flattened = orderedWithHeaders.filter(x => !x.__groupHeader && !x.__seasonHeader);
     window.allFiles = flattened.slice(0, CONFIG.METADATA_CAP);
+
     const baseKey = (() => { try { return parseParts(nf.name||'').base; } catch(e) { return normalizeString((nf.name||'').replace(/\.[^.]+$/,'')); } })();
     replaceGroupDOM(baseKey);
   }
@@ -608,17 +602,20 @@
     if(msg.type === 'remove'){
       const ident = msg.url || msg.name;
       window.allFiles = (window.allFiles||[]).filter(x => x.url !== ident);
-      try{
+      try {
         const listEl = document.getElementById('fileList');
         const node = Array.from(listEl.querySelectorAll('[data-url]')).find(n => n.dataset && n.dataset.url === ident);
         if(node && node.parentElement) node.parentElement.remove();
-      }catch(e){}
+      } catch(e){}
       updateEmpty();
       return;
     }
 
     if(msg.type === 'notify' && Array.isArray(msg.files)){
-      for(const f of msg.files){ if(!f) continue; applyIncrementalFile(f); }
+      for(const f of msg.files){
+        if(!f) continue;
+        applyIncrementalFile(f);
+      }
       return;
     }
   }
@@ -632,9 +629,9 @@
 
   function snapshotPlayingVideos(){
     const map = new Map();
-    try{
-      document.querySelectorAll('#fileList video').forEach(v=>{
-        try{
+    try {
+      document.querySelectorAll('#fileList video').forEach(v => {
+        try {
           if(!v.paused && !v.ended){
             const src = v.currentSrc || v.src || (v.dataset && v.dataset.url) || '';
             if(src){
@@ -642,18 +639,17 @@
               map.set(src, v);
             }
           }
-        }catch(e){}
+        } catch(e){}
       });
-    }catch(e){}
+    } catch(e){}
     return map;
   }
-
   function restorePlayingVideos(map){
     if(!map || !map.size) return;
     const listEl = document.getElementById('fileList');
     const previews = Array.from(listEl.querySelectorAll('[data-url]'));
     for(const [src, videoEl] of map.entries()){
-      try{
+      try {
         let found = null;
         for(const p of previews){ if((p.dataset && p.dataset.url) === src){ found = p; break; } }
         if(found && found.parentElement){
@@ -662,7 +658,7 @@
           videoEl.setAttribute('playsinline','');
           found.parentElement.replaceChild(videoEl, found);
         }
-      }catch(e){}
+      } catch(e){}
     }
   }
 
@@ -706,7 +702,9 @@
 
   function ensureSentinelObserver(){
     if(sentinelObserver) return;
-    sentinelObserver = new IntersectionObserver(entries => { entries.forEach(e => { if(e.isIntersecting) renderNextChunk(); }); }, { root:null, rootMargin:'600px', threshold:0.01 });
+    sentinelObserver = new IntersectionObserver(entries => { entries.forEach(e => { if(e.isIntersecting) {
+      renderNextChunk();
+    } }); }, { root:null, rootMargin:'600px', threshold:0.01 });
   }
 
   function updateEmpty(){
@@ -743,20 +741,20 @@
   }
 
   function connectWebSocket(){
-    try{ ws = new WebSocket(CONFIG.WS_PATH); }catch(e){ ws=null; startSSE(); startPolling(); return; }
-    ws.addEventListener('open', ()=>{ reconnectAttempts = 0; try{ ws.send(JSON.stringify({ type:'subscribe', channel:'files' })); }catch(e){} });
-    ws.addEventListener('message', ev => { try{ const msg = JSON.parse(ev.data); bufferAndFlush(msg); }catch(e){ console.error(e); } });
+    try{ ws = new WebSocket(CONFIG.WS_PATH); } catch(e){ ws=null; startSSE(); startPolling(); return; }
+    ws.addEventListener('open', ()=>{ reconnectAttempts = 0; try{ ws.send(JSON.stringify({ type:'subscribe', channel:'files' })); } catch(e){} });
+    ws.addEventListener('message', ev => { try{ const msg = JSON.parse(ev.data); bufferAndFlush(msg); } catch(e){ console.error(e); } });
     ws.addEventListener('close', ()=>{ ws=null; startSSE(); scheduleReconnect(); });
-    ws.addEventListener('error', ()=>{ try{ ws.close(); }catch(e){} });
+    ws.addEventListener('error', ()=>{ try{ ws.close(); } catch(e){} });
   }
   function scheduleReconnect(){ reconnectAttempts++; const delay = Math.min(30000, 1000 * Math.pow(1.6, Math.min(10,reconnectAttempts))); setTimeout(()=>{ if(!ws) connectWebSocket(); }, delay); }
 
   function startSSE(){
     if(typeof EventSource === 'undefined'){ startPolling(); return; }
     if(es) return;
-    try{ es = new EventSource(CONFIG.SSE_PATH); }catch(e){ es=null; startPolling(); return; }
-    es.onmessage = ev => { try{ const msg = JSON.parse(ev.data); bufferAndFlush(msg); }catch(e){ console.error(e); } };
-    es.onerror = ()=>{ try{ es.close(); }catch(e){} es=null; startPolling(); };
+    try{ es = new EventSource(CONFIG.SSE_PATH); } catch(e){ es=null; startPolling(); return; }
+    es.onmessage = ev => { try{ const msg = JSON.parse(ev.data); bufferAndFlush(msg); } catch(e){ console.error(e); } };
+    es.onerror = ()=>{ try{ es.close(); } catch(e){} es=null; startPolling(); };
   }
 
   function startPolling(){
@@ -790,6 +788,10 @@
   }
 
   connectInitial();
+
+  document.addEventListener('gesturestart', function(e){ try{ e.preventDefault(); }catch(e){} });
+  document.addEventListener('touchmove', function(e){ try{ if(e.scale !== undefined && e.scale !== 1) e.preventDefault(); }catch(e){} }, { passive:false });
+
 })();
   </script>
 </body>
