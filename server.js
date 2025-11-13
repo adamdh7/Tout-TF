@@ -1,4 +1,3 @@
-// server.js
 require('dotenv').config();
 const express = require('express');
 const {
@@ -10,10 +9,6 @@ const {
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-/* --------------------------
-   Helpers: URL normalization
-   -------------------------- */
-
 function normalizePublicUrl(raw) {
   if (!raw) return '';
   let u = String(raw).trim().replace(/^["']|["']$/g, '').replace(/\s+/g, '');
@@ -23,11 +18,6 @@ function normalizePublicUrl(raw) {
   return u;
 }
 
-/**
- * joinUrl(base, path)
- * - preserve slashes between path segments
- * - encode each segment so "/" are preserved
- */
 function joinUrl(base, path) {
   if (!base) return path ? `${encodeURIComponent(path)}` : '';
   const b = String(base).replace(/\/+$/g, '');
@@ -38,10 +28,8 @@ function joinUrl(base, path) {
 }
 
 function buildPublicUrl(cfg, key) {
-  // prefer PUBLIC_URL if present, else endpoint, else fallback to key-only
   if (cfg.publicUrl) return joinUrl(cfg.publicUrl, key);
   if (cfg.endpoint) {
-    // ensure endpoint has protocol
     let ep = String(cfg.endpoint).trim();
     if (!/^https?:\/\//i.test(ep)) ep = 'https://' + ep.replace(/^\/+/g, '');
     ep = ep.replace(/\/+$/g, '');
@@ -49,10 +37,6 @@ function buildPublicUrl(cfg, key) {
   }
   return encodeURI(key);
 }
-
-/* --------------------------
-   Load configs from env
-   -------------------------- */
 
 function makeConfigsFromEnv() {
   const wantedProps = [
@@ -107,7 +91,7 @@ function makeConfigsFromEnv() {
         region,
         endpoint,
         credentials: { accessKeyId: accessKey, secretAccessKey: secretKey },
-        forcePathStyle: false, // R2 usually works without path style; change if needed
+        forcePathStyle: false,
       });
       configs.push({
         id: groupKey,
@@ -135,20 +119,10 @@ function makeConfigsFromEnv() {
 
 const configs = makeConfigsFromEnv();
 
-/* --------------------------
-   Static / middleware
-   -------------------------- */
-
-app.use(express.static('public', { extensions: ['html'] }));
-
-/* --------------------------
-   Listing & pagination
-   -------------------------- */
-
-async function listAllObjectsPaginated(cfg, continuationToken) {
+function listAllObjectsPaginated(cfg, continuationToken) {
   const all = [];
   let token = continuationToken;
-  try {
+  return (async () => {
     while (true) {
       const params = { Bucket: cfg.bucket, MaxKeys: 1000 };
       if (token) params.ContinuationToken = token;
@@ -158,16 +132,13 @@ async function listAllObjectsPaginated(cfg, continuationToken) {
       if (!resp.IsTruncated) break;
       token = resp.NextContinuationToken;
     }
-  } catch (err) {
-    // bubble up error as exception
-    throw err;
-  }
-  return all;
+    return all;
+  })();
 }
 
-async function listFilesForConfig(cfg) {
-  if (cfg.error) return [{ set: cfg.id, bucket: cfg.bucket || null, error: cfg.error }];
-  try {
+function listFilesForConfig(cfg) {
+  if (cfg.error) return Promise.resolve([{ set: cfg.id, bucket: cfg.bucket || null, error: cfg.error }]);
+  return (async () => {
     const contents = await listAllObjectsPaginated(cfg);
     return contents.map((f) => {
       const key = String(f.Key);
@@ -182,18 +153,97 @@ async function listFilesForConfig(cfg) {
         url,
       };
     });
-  } catch (err) {
-    return [{ set: cfg.id, bucket: cfg.bucket, error: String(err) }];
-  }
+  })();
 }
 
-/* --------------------------
-   Endpoints
-   -------------------------- */
+function isImageKey(key) {
+  return /\.(png|jpg|jpeg|gif|webp|bmp)(?:$|\?)/i.test(String(key || ''));
+}
+
+function chunkArray(arr, n) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
+  return out;
+}
+
+app.use(async (req, res, next) => {
+  try {
+    const sipRaw = req.query && (req.query.sip || req.query.SIP);
+    if (!sipRaw) return next();
+    const sip = String(sipRaw).trim();
+    if (!sip) return res.status(400).json({ ok: false, error: 'invalid sip' });
+    const dry = String(req.query.dry || 'false') === 'true';
+    const setId = req.query.set || null;
+    let targetConfigs = configs;
+    if (setId) {
+      const cfg = configs.find(c => c.id === setId);
+      if (!cfg) return res.status(404).json({ ok: false, error: 'set not found', set: setId });
+      targetConfigs = [cfg];
+    }
+    const results = [];
+    for (const cfg of targetConfigs) {
+      if (cfg.error) {
+        results.push({ set: cfg.id, bucket: cfg.bucket || null, error: cfg.error });
+        continue;
+      }
+      try {
+        const objs = await listAllObjectsPaginated(cfg);
+        const toDelete = objs
+          .filter(o => {
+            if (!o || !o.Key) return false;
+            const k = String(o.Key);
+            if (k === sip) return true;
+            if (k.startsWith(sip)) return true;
+            if (k.includes(sip + ' ')) return true;
+            if (k.includes(sip + ' -')) return true;
+            if (k.includes(sip + '_')) return true;
+            if (k.includes(sip + '.')) return true;
+            if (k.includes(sip + '-')) return true;
+            if (k.includes(sip)) return true;
+            return false;
+          })
+          .map(o => String(o.Key));
+        if (!toDelete.length) {
+          results.push({ set: cfg.id, bucket: cfg.bucket, deleted: 0, items: [] });
+          continue;
+        }
+        if (dry) {
+          results.push({ set: cfg.id, bucket: cfg.bucket, deleted: 0, dry: true, items: toDelete.slice(0, 1000) });
+          continue;
+        }
+        const batches = chunkArray(toDelete, 1000);
+        const deletedNames = [];
+        const errors = [];
+        for (const batch of batches) {
+          const delReq = {
+            Bucket: cfg.bucket,
+            Delete: { Objects: batch.map(k => ({ Key: k })) },
+          };
+          try {
+            const delResp = await cfg.client.send(new DeleteObjectsCommand(delReq));
+            const deleted = delResp.Deleted || [];
+            const err = delResp.Errors || [];
+            deleted.forEach(d => deletedNames.push(d.Key));
+            err.forEach(e => errors.push({ Key: e.Key, Code: e.Code, Message: e.Message }));
+          } catch (e) {
+            errors.push({ error: String(e) });
+          }
+        }
+        results.push({ set: cfg.id, bucket: cfg.bucket, deleted: deletedNames.length, items: deletedNames, errors });
+      } catch (e) {
+        results.push({ set: cfg.id, bucket: cfg.bucket, error: String(e) });
+      }
+    }
+    return res.json({ ok: true, sip, dry: !!dry, results });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+app.use(express.static('public', { extensions: ['html'] }));
 
 app.get('/files', async (req, res) => {
   try {
-    // Prevent caching of listing (avoid CDN/browser stale list)
     res.set('Cache-Control', 'no-store, max-age=0, must-revalidate');
     const lists = await Promise.all(configs.map((c) => listFilesForConfig(c)));
     const flat = lists.flat().filter(Boolean);
@@ -230,20 +280,6 @@ app.get('/files/:setId', async (req, res) => {
     res.status(500).json({ ok: false, error: String(err) });
   }
 });
-
-/* --------------------------
-   Prune endpoints (images only)
-   -------------------------- */
-
-function isImageKey(key) {
-  return /\.(png|jpg|jpeg|gif|webp|bmp)(?:$|\?)/i.test(String(key || ''));
-}
-
-function chunkArray(arr, n) {
-  const out = [];
-  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
-  return out;
-}
 
 app.get('/prune', async (req, res) => {
   const ttl = parseInt(req.query.ttl || '86400', 10);
@@ -330,10 +366,6 @@ app.get('/prune/:setId', async (req, res) => {
     res.status(500).json({ ok: false, error: String(err) });
   }
 });
-
-/* --------------------------
-   Start server
-   -------------------------- */
 
 app.listen(PORT, () => {
   console.log(`Server ready: http://localhost:${PORT}`);
