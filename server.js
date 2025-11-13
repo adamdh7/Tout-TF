@@ -1,8 +1,18 @@
+// server.js
 require('dotenv').config();
 const express = require('express');
-const { S3Client, ListObjectsV2Command, DeleteObjectsCommand } = require('@aws-sdk/client-s3');
+const {
+  S3Client,
+  ListObjectsV2Command,
+  DeleteObjectsCommand,
+} = require('@aws-sdk/client-s3');
+
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+/* --------------------------
+   Helpers: URL normalization
+   -------------------------- */
 
 function normalizePublicUrl(raw) {
   if (!raw) return '';
@@ -12,17 +22,42 @@ function normalizePublicUrl(raw) {
   u = u.replace(/\/+$/g, '');
   return u;
 }
+
+/**
+ * joinUrl(base, path)
+ * - preserve slashes between path segments
+ * - encode each segment so "/" are preserved
+ */
 function joinUrl(base, path) {
   if (!base) return path ? `${encodeURIComponent(path)}` : '';
   const b = String(base).replace(/\/+$/g, '');
   const p = String(path || '').replace(/^\/+/g, '');
-  return p ? `${b}/${encodeURIComponent(p)}` : b;
+  if (!p) return b;
+  const encoded = p.split('/').map(seg => encodeURIComponent(seg)).join('/');
+  return `${b}/${encoded}`;
 }
+
+function buildPublicUrl(cfg, key) {
+  // prefer PUBLIC_URL if present, else endpoint, else fallback to key-only
+  if (cfg.publicUrl) return joinUrl(cfg.publicUrl, key);
+  if (cfg.endpoint) {
+    // ensure endpoint has protocol
+    let ep = String(cfg.endpoint).trim();
+    if (!/^https?:\/\//i.test(ep)) ep = 'https://' + ep.replace(/^\/+/g, '');
+    ep = ep.replace(/\/+$/g, '');
+    return joinUrl(ep, key);
+  }
+  return encodeURI(key);
+}
+
+/* --------------------------
+   Load configs from env
+   -------------------------- */
 
 function makeConfigsFromEnv() {
   const wantedProps = [
-    'BUCKET','ENDPOINT','ACCESS_KEY_ID','ACCESS_KEY','SECRET_ACCESS_KEY','SECRET',
-    'PUBLIC_URL','REGION','FRONTEND_ORIGIN','CF_ACCOUNT_ID',
+    'BUCKET', 'ENDPOINT', 'ACCESS_KEY_ID', 'ACCESS_KEY', 'SECRET_ACCESS_KEY', 'SECRET',
+    'PUBLIC_URL', 'REGION', 'FRONTEND_ORIGIN', 'CF_ACCOUNT_ID',
   ];
   const groups = {};
   for (const [k, v] of Object.entries(process.env)) {
@@ -72,7 +107,7 @@ function makeConfigsFromEnv() {
         region,
         endpoint,
         credentials: { accessKeyId: accessKey, secretAccessKey: secretKey },
-        forcePathStyle: false,
+        forcePathStyle: false, // R2 usually works without path style; change if needed
       });
       configs.push({
         id: groupKey,
@@ -100,16 +135,43 @@ function makeConfigsFromEnv() {
 
 const configs = makeConfigsFromEnv();
 
+/* --------------------------
+   Static / middleware
+   -------------------------- */
+
 app.use(express.static('public', { extensions: ['html'] }));
 
-async function listFilesForConfig(cfg, maxKeys = 1000) {
+/* --------------------------
+   Listing & pagination
+   -------------------------- */
+
+async function listAllObjectsPaginated(cfg, continuationToken) {
+  const all = [];
+  let token = continuationToken;
+  try {
+    while (true) {
+      const params = { Bucket: cfg.bucket, MaxKeys: 1000 };
+      if (token) params.ContinuationToken = token;
+      const resp = await cfg.client.send(new ListObjectsV2Command(params));
+      const contents = resp.Contents || [];
+      for (const f of contents) all.push(f);
+      if (!resp.IsTruncated) break;
+      token = resp.NextContinuationToken;
+    }
+  } catch (err) {
+    // bubble up error as exception
+    throw err;
+  }
+  return all;
+}
+
+async function listFilesForConfig(cfg) {
   if (cfg.error) return [{ set: cfg.id, bucket: cfg.bucket || null, error: cfg.error }];
   try {
-    const data = await cfg.client.send(new ListObjectsV2Command({ Bucket: cfg.bucket, MaxKeys: maxKeys }));
-    const contents = data.Contents || [];
+    const contents = await listAllObjectsPaginated(cfg);
     return contents.map((f) => {
       const key = String(f.Key);
-      const url = cfg.publicUrl ? joinUrl(cfg.publicUrl, key) : `${encodeURIComponent(key)}`;
+      const url = buildPublicUrl(cfg, key);
       return {
         set: cfg.id,
         account: cfg.account || null,
@@ -125,8 +187,14 @@ async function listFilesForConfig(cfg, maxKeys = 1000) {
   }
 }
 
+/* --------------------------
+   Endpoints
+   -------------------------- */
+
 app.get('/files', async (req, res) => {
   try {
+    // Prevent caching of listing (avoid CDN/browser stale list)
+    res.set('Cache-Control', 'no-store, max-age=0, must-revalidate');
     const lists = await Promise.all(configs.map((c) => listFilesForConfig(c)));
     const flat = lists.flat().filter(Boolean);
     const normalFiles = flat.filter((f) => !f.error && f.name);
@@ -144,6 +212,7 @@ app.get('/files', async (req, res) => {
 
 app.get('/files/:setId', async (req, res) => {
   try {
+    res.set('Cache-Control', 'no-store, max-age=0, must-revalidate');
     const setId = req.params.setId;
     const cfg = configs.find((c) => c.id === setId);
     if (!cfg) return res.status(404).json({ ok: false, error: 'set not found' });
@@ -162,29 +231,17 @@ app.get('/files/:setId', async (req, res) => {
   }
 });
 
-async function listAllObjectsPaginated(cfg, continuationToken) {
-  const all = [];
-  let token = continuationToken;
-  while (true) {
-    const params = { Bucket: cfg.bucket, MaxKeys: 1000, ContinuationToken: token };
-    const resp = await cfg.client.send(new ListObjectsV2Command(params));
-    const contents = resp.Contents || [];
-    for (const f of contents) {
-      all.push(f);
-    }
-    if (!resp.IsTruncated) break;
-    token = resp.NextContinuationToken;
-  }
-  return all;
-}
+/* --------------------------
+   Prune endpoints (images only)
+   -------------------------- */
 
 function isImageKey(key) {
-  return /\.png(?:$|\?)/i.test(String(key || ''));
+  return /\.(png|jpg|jpeg|gif|webp|bmp)(?:$|\?)/i.test(String(key || ''));
 }
 
 function chunkArray(arr, n) {
   const out = [];
-  for (let i=0;i<arr.length;i+=n) out.push(arr.slice(i,i+n));
+  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
   return out;
 }
 
@@ -274,7 +331,11 @@ app.get('/prune/:setId', async (req, res) => {
   }
 });
 
+/* --------------------------
+   Start server
+   -------------------------- */
+
 app.listen(PORT, () => {
   console.log(`Server ready: http://localhost:${PORT}`);
-  console.log('Discovered configs:', configs.map(c => ({ id: c.id, bucket: c.bucket, error: c.error ? true : false })));
+  console.log('Discovered configs:', configs.map(c => ({ id: c.id, bucket: c.bucket, error: !!c.error })));
 });
