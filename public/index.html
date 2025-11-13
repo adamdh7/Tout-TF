@@ -81,7 +81,6 @@
   window.viewFiles = [];
   let ws = null, es = null, pollTimer = null, reconnectAttempts = 0;
   let pendingMsgs = [];
-  let silentLogCache = [];
   let renderedCount = 0;
   let sentinelObserver = null;
 
@@ -114,17 +113,6 @@
   function removeBracketed(s){
     if(!s) return s;
     return s.replace(/[\{][^\}]*[\]\)\}]/g,'').replace(/\s+/g,' ').trim();
-  }
-
-  function stripPrefixes(noExt){
-    if(!noExt) return '';
-    let s = noExt;
-    s = s.replace(/^[0-9]{6,}[_\-]*/,'');
-    s = s.replace(/^[\{][^)\}]*[\]\}][_\-\s]*/,'');
-    s = s.replace(/^@[^_\-\s]+[_\-\s]*/g,'').replace(/^[_\-]+@[^_\-\s]+[_\-\s]*/g,'');
-    s = s.replace(/[_\-\.\s]+/g,' ');
-    s = s.replace(/\s+/g,' ').trim();
-    return s;
   }
 
   function parseParts(name){
@@ -216,8 +204,10 @@
     return collator.compare(aNoExt,bNoExt);
   }
 
+  // group header (dataset.base used to find or insert groups)
   function createGroupHeader(f){
     const head = document.createElement('div'); head.className = 'group-head';
+    try { head.dataset.base = f.base || ''; } catch(e){}
     const left = document.createElement('div'); left.className = 'group-title';
     const pretty = (f.base || '(sans nom)').replace(/[_\-\s]+/g,' ').trim();
     left.textContent = pretty;
@@ -225,22 +215,20 @@
     const rightWrap = document.createElement('div'); rightWrap.style.display='flex'; rightWrap.style.gap='8px'; rightWrap.style.alignItems='center';
     const right = document.createElement('div'); right.style.fontSize='13px'; right.style.color='#555'; right.style.whiteSpace='nowrap'; right.textContent = f.newest ? ('Dernier upload : ' + new Date(Number(f.newest)).toLocaleString()) : '';
     rightWrap.appendChild(right);
-    const copyAllBtn = document.createElement('button'); copyAllBtn.className='copy-all-btn'; copyAllBtn.title='Copier tous les Name Saison X ep Y + Url'; copyAllBtn.innerHTML = 'Copier tout';
+    const copyAllBtn = document.createElement('button'); copyAllBtn.className='copy-all-btn'; copyAllBtn.title='Copier tout'; copyAllBtn.innerHTML = 'Copier tout';
     copyAllBtn.addEventListener('click', (ev) => { ev.stopPropagation(); try{ copyGroup(f.base); } catch(e){ console.error(e); } copyAllBtn.classList.add('copied'); setTimeout(()=>copyAllBtn.classList.remove('copied'),1200); });
     rightWrap.appendChild(copyAllBtn);
     head.appendChild(rightWrap);
     return head;
   }
 
+  // season header (no note shown)
   function createSeasonHeader(obj){
     const head = document.createElement('div'); head.className = 'season-head';
+    try { head.dataset.season = String(obj.season); } catch(e){}
     const left = document.createElement('div'); left.className = 'season-title';
     left.textContent = obj.seasonLabel || (obj.season === 'base' ? 'Base' : ('Saison ' + obj.season));
     head.appendChild(left);
-    if(obj.note){
-      const note = document.createElement('div'); note.style.fontSize='12px'; note.style.color='#666'; note.textContent = obj.note;
-      head.appendChild(note);
-    }
     return head;
   }
 
@@ -456,7 +444,7 @@
 
       for(const sk of seasonKeys){
         const items = seasonMap.get(sk) || [];
-        out.push({ __seasonHeader:true, season: sk, seasonLabel: (sk === 'base' ? 'Base' : ('Saison ' + sk)), note:'' });
+        out.push({ __seasonHeader:true, season: sk, seasonLabel: (sk === 'base' ? 'Base' : ('Saison ' + sk)) });
 
         // group by episode key
         const epBuckets = new Map();
@@ -599,7 +587,6 @@
       const f = source[i];
       if(f.__groupHeader){ frag.appendChild(createCardElement(f,false)); continue; }
       const isVideo = isVideoFile(f.url || f.name || '');
-      // createVideo should be true while we haven't reached MAX_VIDEOS_RENDER
       const createVideo = isVideo ? (videoCount < CONFIG.MAX_VIDEOS_RENDER) : false;
       const card = createCardElement(f, createVideo);
       if(isVideo && createVideo) videoCount++;
@@ -633,17 +620,219 @@
     empty.style.display = (len === 0) ? 'block' : 'none';
   }
 
-  // snapshot currently playing videos (so we can reattach them after a re-render)
+  // snapshot playing videos inside a set of nodes (we only detach those)
+  function snapshotVideosInNodes(nodes){
+    const map = new Map();
+    try {
+      nodes.forEach(node => {
+        if(!node) return;
+        node.querySelectorAll && node.querySelectorAll('video').forEach(v => {
+          try {
+            if(!v.paused && !v.ended){
+              const src = v.currentSrc || v.src || (v.dataset && v.dataset.url) || '';
+              if(src){
+                if(v.parentElement) v.parentElement.removeChild(v);
+                map.set(src, v);
+              }
+            }
+          } catch(e){}
+        });
+      });
+    } catch(e){}
+    return map;
+  }
+
+  // restore preserved videos into the provided fragment by matching data-url placeholders
+  function restoreVideosToFragment(container, preservedMap){
+    if(!preservedMap || !preservedMap.size) return;
+    try {
+      const candidates = Array.from(container.querySelectorAll('[data-url]'));
+      for(const [src, videoEl] of preservedMap.entries()){
+        try {
+          let found = candidates.find(c => (c.dataset && c.dataset.url) === src);
+          if(found && found.parentElement){
+            videoEl.className = videoEl.className || 'thumb';
+            videoEl.controls = true;
+            videoEl.setAttribute('playsinline','');
+            found.parentElement.replaceChild(videoEl, found);
+          } else {
+            // if no placeholder found, do nothing (don't prepend to top). This preserves group locality.
+          }
+        } catch(e){}
+      }
+    } catch(e){}
+  }
+
+  // replace or insert a single group's DOM (keeps images and videos in their group)
+  function replaceGroupDOM(baseKey){
+    if(!baseKey) return;
+    const listEl = document.getElementById('fileList');
+
+    // compute ordered groups according to current window.allFiles (so insertion position is correct)
+    const fullOrdered = buildOrderedList(window.allFiles || []);
+    const groupOrder = fullOrdered.filter(x=>x.__groupHeader).map(g=>g.base);
+
+    // find existing children and indices for the group if present
+    const children = Array.from(listEl.children);
+    let startIdx = -1, endIdx = children.length;
+    for(let i=0;i<children.length;i++){
+      const ch = children[i];
+      if(ch.dataset && ch.dataset.base === baseKey){
+        startIdx = i; break;
+      }
+    }
+    if(startIdx !== -1){
+      for(let j = startIdx + 1; j < children.length; j++){
+        if(children[j].dataset && children[j].dataset.base && children[j].dataset.base !== ''){
+          endIdx = j; break;
+        }
+      }
+    }
+
+    // build group's files (subset of window.allFiles)
+    const groupFiles = (window.allFiles || []).filter(f => {
+      try { return parseParts(f.name||'').base === baseKey; } catch(e){ return false; }
+    });
+
+    // if group has no files: remove existing DOM range if any, done.
+    if(groupFiles.length === 0){
+      if(startIdx !== -1){
+        // snapshot videos in that range
+        const nodesToRemove = children.slice(startIdx, endIdx);
+        const preserved = snapshotVideosInNodes(nodesToRemove);
+        // remove old nodes
+        for(let k = startIdx; k < endIdx; k++){ if(listEl.children[startIdx]) listEl.removeChild(listEl.children[startIdx]); }
+        // we DO NOT prepend preserved videos to top; instead we just discard or let them be GC'd.
+      }
+      updateEmpty();
+      return;
+    }
+
+    // build new fragment for group
+    const ordered = buildOrderedList(groupFiles);
+    const tmpFrag = document.createDocumentFragment();
+    let videoCount = 0;
+    for(const item of ordered){
+      const isVideo = isVideoFile(item.url || item.name || '');
+      const createVideo = isVideo ? (videoCount < CONFIG.MAX_VIDEOS_RENDER) : false;
+      const node = createCardElement(item, createVideo);
+      if(item.__groupHeader && node && node.dataset) node.dataset.base = item.base || '';
+      if(item.__seasonHeader && node && node.dataset) node.dataset.season = String(item.season || '');
+      tmpFrag.appendChild(node);
+      if(isVideo && createVideo) videoCount++;
+    }
+
+    // snapshot only videos inside the existing nodes for this group (to keep playback)
+    const existingNodes = (startIdx !== -1) ? children.slice(startIdx, endIdx) : [];
+    const preserved = snapshotVideosInNodes(existingNodes);
+
+    // restore preserved into tmpFrag (by matching data-url)
+    const wrapper = document.createElement('div'); wrapper.appendChild(tmpFrag);
+    restoreVideosToFragment(wrapper, preserved);
+
+    // insert into DOM at correct spot:
+    if(startIdx !== -1){
+      // replace range in place
+      for(let k = startIdx; k < endIdx; k++){ if(listEl.children[startIdx]) listEl.removeChild(listEl.children[startIdx]); }
+      let ref = listEl.children[startIdx] || null;
+      while(wrapper.firstChild) listEl.insertBefore(wrapper.firstChild, ref);
+    } else {
+      // group not present yet: find insertion index based on groupOrder
+      const myIndex = groupOrder.indexOf(baseKey);
+      let inserted = false;
+      if(myIndex !== -1){
+        // find next group's DOM node and insert before it
+        for(let gIdx = myIndex + 1; gIdx < groupOrder.length; gIdx++){
+          const nextBase = groupOrder[gIdx];
+          const nextNode = Array.from(listEl.children).find(c => c.dataset && c.dataset.base === nextBase);
+          if(nextNode){
+            // insert before nextNode
+            while(wrapper.firstChild) listEl.insertBefore(wrapper.firstChild, nextNode);
+            inserted = true;
+            break;
+          }
+        }
+      }
+      if(!inserted){
+        // append to end
+        while(wrapper.firstChild) listEl.appendChild(wrapper.firstChild);
+      }
+    }
+
+    updateEmpty();
+  }
+
+  // apply single file incrementally: update window.allFiles and replace only its group DOM
+  function applyIncrementalFile(file){
+    if(!file || !file.url) return;
+    const nf = { name:file.name, url:file.url, size: toNum(file.size), lastModified: toNum(file.lastModified), thumbnail: file.thumbnail || null, __serverIndex: (typeof file.__serverIndex === 'number' ? file.__serverIndex : undefined) };
+    // update allFiles: remove same url, add at top
+    window.allFiles = (window.allFiles || []).filter(x => x.url !== nf.url);
+    window.allFiles.unshift(nf);
+    if(window.allFiles.length > CONFIG.METADATA_CAP) window.allFiles.length = CONFIG.METADATA_CAP;
+    // dedupe by url preserving order
+    const seen = new Set(), uniq = [];
+    for(const it of window.allFiles){ if(!it || !it.url) continue; if(seen.has(it.url)) continue; seen.add(it.url); uniq.push(it); }
+    window.allFiles = uniq;
+    const baseKey = (function(){ try{ return parseParts(nf.name||'').base; }catch(e){ return normalizeString((nf.name||'').replace(/\.[^.]+$/,'')); } })();
+    replaceGroupDOM(baseKey);
+  }
+
+  // handle server messages incrementally (no full rerender on add/update/notify)
+  function handleServerMsg(msg){
+    if(!msg || !msg.type) return;
+    const normFile = f => ({ name:f.name, url:f.url, size: toNum(f.size), lastModified: toNum(f.lastModified), thumbnail: f.thumbnail || null, __serverIndex: (typeof f.__serverIndex === 'number' ? f.__serverIndex : undefined) });
+
+    if(msg.type === 'full' && Array.isArray(msg.files)){
+      const arr = msg.files.map((f, idx) => { const nf = normFile(f); nf.__serverIndex = idx; return nf; });
+      const seen = new Set(), unique = [];
+      for(const it of arr){ if(!it.url) continue; if(!seen.has(it.url)){ seen.add(it.url); unique.push(it); } }
+      window.allFiles = unique.slice(0, CONFIG.METADATA_CAP);
+      fullRerender(); return;
+    }
+
+    if((msg.type === 'add' || msg.type === 'update') && msg.file){
+      applyIncrementalFile(msg.file);
+      return;
+    }
+
+    if(msg.type === 'remove'){
+      const ident = msg.url || msg.name;
+      window.allFiles = (window.allFiles||[]).filter(x => x.url !== ident);
+      try {
+        const listEl = document.getElementById('fileList');
+        const node = Array.from(listEl.querySelectorAll('[data-url]')).find(n => n.dataset && n.dataset.url === ident);
+        if(node && node.parentElement) node.parentElement.remove();
+      } catch(e){}
+      updateEmpty();
+      return;
+    }
+
+    if(msg.type === 'notify' && Array.isArray(msg.files)){
+      for(const f of msg.files){
+        if(!f) continue;
+        applyIncrementalFile(f);
+      }
+      return;
+    }
+  }
+
+  function bufferAndFlush(msg){ pendingMsgs.push(msg); }
+  setInterval(()=> {
+    if(!pendingMsgs.length) return;
+    const batch = pendingMsgs.splice(0,pendingMsgs.length);
+    for(const m of batch) try{ handleServerMsg(m); } catch(e){ console.error(e); }
+  }, CONFIG.BATCH_FLUSH_MS);
+
+  // simplified snapshot/restore for global full rerender (keeps playback)
   function snapshotPlayingVideos(){
     const map = new Map();
     try {
       document.querySelectorAll('#fileList video').forEach(v => {
         try {
-          // preserve if currently playing (not paused) OR user has progressed (currentTime > 0)
           if(!v.paused && !v.ended){
             const src = v.currentSrc || v.src || (v.dataset && v.dataset.url) || '';
             if(src){
-              // detach from DOM but keep the element object so playback continues
               if(v.parentElement) v.parentElement.removeChild(v);
               map.set(src, v);
             }
@@ -653,51 +842,29 @@
     } catch(e){}
     return map;
   }
-
-  // restore any preserved videos into newly rendered DOM
   function restorePlayingVideos(map){
     if(!map || !map.size) return;
     const listEl = document.getElementById('fileList');
-    // build list of preview nodes we can match by data-url
     const previews = Array.from(listEl.querySelectorAll('[data-url]'));
     for(const [src, videoEl] of map.entries()){
       try {
-        // find first preview with matching data-url (exact match)
         let found = null;
-        for(const p of previews){
-          if((p.dataset && p.dataset.url) === src){
-            found = p;
-            break;
-          }
-        }
+        for(const p of previews){ if((p.dataset && p.dataset.url) === src){ found = p; break; } }
         if(found && found.parentElement){
-          // ensure video element has the correct classes and attributes
           videoEl.className = videoEl.className || 'thumb';
           videoEl.controls = true;
           videoEl.setAttribute('playsinline','');
-          // replace preview with preserved video element
           found.parentElement.replaceChild(videoEl, found);
-        } else {
-          // if no matching preview, prepend the preserved video at top so user keeps watching
-          const wrapper = document.createElement('div');
-          wrapper.className = 'card';
-          wrapper.appendChild(videoEl);
-          const info = document.createElement('div'); info.className = 'info';
-          info.innerHTML = '<div class="meta">Lecture en cours</div>';
-          wrapper.appendChild(info);
-          listEl.insertBefore(wrapper, listEl.firstChild);
-        }
+        } // else do nothing
       } catch(e){}
     }
   }
 
   function fullRerender(){
-    // preserve playing videos so their playback won't restart
     const preserved = snapshotPlayingVideos();
     renderedCount = 0;
     document.getElementById('fileList').innerHTML = '';
     renderNextChunk();
-    // after rendering, restore playing videos into their matching cards
     restorePlayingVideos(preserved);
   }
 
@@ -721,8 +888,6 @@
       const res = await fetch(CONFIG.FILES_PATH, { cache:'no-store' });
       if(!res.ok) throw new Error('fetch failed');
       const filesRaw = await res.json();
-
-      // attach server index so frontend can preserve server ordering when available
       const files = (filesRaw || []).map((f, idx) => ({
         name: f.name,
         url: f.url,
@@ -731,72 +896,12 @@
         thumbnail: f.thumbnail || null,
         __serverIndex: idx
       }));
-
       const seen = new Set(), unique = [];
       for(const it of files){ if(!it.url) continue; if(!seen.has(it.url)){ seen.add(it.url); unique.push(it); } }
       window.allFiles = unique.slice(0, CONFIG.METADATA_CAP);
       fullRerender();
     }catch(e){ console.error(e); }
   }
-
-  function handleServerMsg(msg){
-    if(!msg || !msg.type) return;
-    const normFile = f => ({ name:f.name, url:f.url, size: toNum(f.size), lastModified: toNum(f.lastModified), thumbnail: f.thumbnail || null, __serverIndex: (typeof f.__serverIndex === 'number' ? f.__serverIndex : undefined) });
-
-    // 'full' still does a full replacement
-    if(msg.type === 'full' && Array.isArray(msg.files)){
-      const arr = msg.files.map((f, idx) => { const nf = normFile(f); nf.__serverIndex = idx; return nf; });
-      const seen = new Set(), unique = [];
-      for(const it of arr){ if(!it.url) continue; if(!seen.has(it.url)){ seen.add(it.url); unique.push(it); } }
-      window.allFiles = unique.slice(0, CONFIG.METADATA_CAP);
-      fullRerender(); return;
-    }
-
-    // For adds/updates/notify: push into silentLogCache (silence) and updateNewIndicator.
-    // This avoids immediate full rerender which would interrupt playback.
-    if((msg.type === 'add' || msg.type === 'update') && msg.file){
-      const file = normFile(msg.file);
-      // dedupe in silentLogCache by url
-      silentLogCache = silentLogCache.filter(x => x.url !== file.url);
-      silentLogCache.unshift(file);
-      // also keep cache size reasonable
-      if(silentLogCache.length > CONFIG.METADATA_CAP) silentLogCache.length = CONFIG.METADATA_CAP;
-      updateNewIndicator();
-      return;
-    }
-
-    if(msg.type === 'remove'){
-      const ident = msg.url || msg.name;
-      // remove from allFiles and remove its DOM card without full rerender
-      window.allFiles = (window.allFiles||[]).filter(x => x.url !== ident);
-      try {
-        const listEl = document.getElementById('fileList');
-        const node = Array.from(listEl.querySelectorAll('[data-url]')).find(n => n.dataset && n.dataset.url === ident);
-        if(node && node.parentElement) node.parentElement.remove();
-      } catch(e){}
-      updateEmpty();
-      return;
-    }
-
-    if(msg.type === 'notify' && Array.isArray(msg.files)){
-      for(const f of msg.files){
-        const file = normFile(f);
-        // dedupe and push into silentLogCache
-        silentLogCache = silentLogCache.filter(x => x.url !== file.url);
-        silentLogCache.unshift(file);
-        if(silentLogCache.length > CONFIG.METADATA_CAP) silentLogCache.length = CONFIG.METADATA_CAP;
-      }
-      updateNewIndicator();
-      return;
-    }
-  }
-
-  function bufferAndFlush(msg){ pendingMsgs.push(msg); }
-  setInterval(()=> {
-    if(!pendingMsgs.length) return;
-    const batch = pendingMsgs.splice(0,pendingMsgs.length);
-    for(const m of batch) try{ handleServerMsg(m); } catch(e){ console.error(e); }
-  }, CONFIG.BATCH_FLUSH_MS);
 
   function connectWebSocket(){
     try{ ws = new WebSocket(CONFIG.WS_PATH); } catch(e){ ws=null; startSSE(); startPolling(); return; }
@@ -835,62 +940,18 @@
   window.copyUrl = copyUrl;
 
   function mergeSilentToAll(count=1){
-    if(!silentLogCache.length) return 0;
-    const items = silentLogCache.splice(0,count);
-    const existingUrls = new Set((window.allFiles||[]).map(x=>x.url));
-    const toAdd = items.filter(it => !existingUrls.has(it.url) && !isImageFile(it.url || it.name));
-    if(!toAdd.length) return 0;
-    // preserve playing videos before re-rendering
-    const preserved = snapshotPlayingVideos();
-    window.allFiles = toAdd.concat(window.allFiles).slice(0, CONFIG.METADATA_CAP);
-    renderedCount = 0;
-    const listEl = document.getElementById('fileList');
-    listEl.innerHTML = '';
-    renderNextChunk();
-    const newDocH = document.documentElement.scrollHeight || 0;
-    // restore playing videos
-    restorePlayingVideos(preserved);
-    updateNewIndicator();
-    return toAdd.length;
+    // kept minimal (not used by incremental apply logic) - left for compatibility
+    return 0;
   }
+  function flushSilentCache(n = CONFIG.FLUSH_BATCH_ON_SCROLL){ return 0; }
 
-  function flushSilentCache(n = CONFIG.FLUSH_BATCH_ON_SCROLL){
-    const flushCount = Math.min(n, silentLogCache.length);
-    if(flushCount <= 0) return 0;
-    return mergeSilentToAll(flushCount);
-  }
-
-  function updateNewIndicator(){
-    const count = silentLogCache.filter(f => !isImageFile(f.url || f.name)).length;
-    const badge = document.getElementById('newIndicator');
-    const showBtn = document.getElementById('showNewBtn');
-    document.getElementById('newCount').textContent = String(count);
-    if(count > 0){ badge.style.display='inline-block'; showBtn.style.display='inline-block'; }
-    else { badge.style.display='none'; showBtn.style.display='none'; }
-  }
-
-  document.getElementById('showNewBtn').addEventListener('click',()=>{
-    const toFlush = Math.min(50, silentLogCache.length);
-    mergeSilentToAll(toFlush);
-    if(silentLogCache.length) updateNewIndicator();
-  });
-
-  setInterval(()=>{
-    if(silentLogCache.length && !document.hidden){
-      if(CONFIG.AUTO_FLUSH_ON_SCROLL){
-        mergeSilentToAll(Math.min(1, silentLogCache.length));
-      }
-      updateNewIndicator();
-    }
-  }, CONFIG.SILENT_FLUSH_INTERVAL_MS);
-
-  function connectInitial(){
+  connectInitial = function(){
     loadFiles();
     connectWebSocket();
     setTimeout(()=>{ if(!ws) startSSE(); }, 1500);
     setTimeout(()=>{ if(!ws && !es) startPolling(); }, 2500);
     window.addEventListener('beforeunload', ()=>{ try{ if(ws) ws.close(); }catch(e){} try{ if(es) es.close(); }catch(e){} stopPolling(); });
-  }
+  };
 
   connectInitial();
 })();
