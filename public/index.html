@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,minimum-scale=1,user-scalable=no" />
   <title>TF-Stream-7</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
@@ -37,6 +37,60 @@
     .badge-new{margin-left:8px}
     #fileList{min-height:120px}
   </style>
+
+  <script>
+    // Universal zoom-disable logic for many devices/browsers:
+    // - meta viewport already set to maximum-scale=1,user-scalable=no
+    // - below JS attempts to block pinch, gesturestart, double-tap zoom, ctrl/meta + wheel zoom, and ctrl/meta + +/- keys
+    (function () {
+      // Prevent pinch-zoom via multi-touch
+      document.addEventListener('touchstart', function (e) {
+        if (e.touches && e.touches.length > 1) {
+          e.preventDefault();
+        }
+      }, { passive: false });
+
+      // Prevent double-tap zoom (block quick successive touchend)
+      let lastTouchEnd = 0;
+      document.addEventListener('touchend', function (e) {
+        const now = Date.now();
+        if (now - lastTouchEnd <= 300) {
+          e.preventDefault();
+        }
+        lastTouchEnd = now;
+      }, { passive: false });
+
+      // Prevent gesturestart (older Safari)
+      document.addEventListener('gesturestart', function (e) {
+        e.preventDefault();
+      });
+
+      // Prevent pinch-to-zoom on some trackpads / browsers that use ctrl+wheel or meta+wheel
+      window.addEventListener('wheel', function (e) {
+        if (e.ctrlKey || e.metaKey) {
+          e.preventDefault();
+        }
+      }, { passive: false });
+
+      // Prevent keyboard zoom shortcuts (Ctrl/Cmd + + / - / 0 / =)
+      window.addEventListener('keydown', function (e) {
+        const isCtrlOrMeta = e.ctrlKey || e.metaKey;
+        if (!isCtrlOrMeta) return;
+        const forbidden = ['=', '+', '-', '0'];
+        // some keyboards report '+' as '=' with shift; handle manually:
+        const key = e.key;
+        if (forbidden.includes(key)) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      }, { passive: false });
+
+      // On some browsers (Edge/Chrome) double-click can zoom: prevent double-click to zoom by preventing dblclick default
+      document.addEventListener('dblclick', function (e) {
+        e.preventDefault();
+      }, { passive: false });
+    })();
+  </script>
 </head>
 <body>
   <header>
@@ -146,7 +200,6 @@
   }
 
   function intraGroupCompare(a,b){
-    // same as before: use parseParts ordering logic inside group
     const pa = parseParts(a.name||''), pb = parseParts(b.name||'');
     const aIsBaseOnly = (!pa.hasEp && pa.ep==null) && (!pa.hasSeason && pa.season==null);
     const bIsBaseOnly = (!pb.hasEp && pb.ep==null) && (!pb.hasSeason && pb.season==null);
@@ -293,7 +346,6 @@
     return card;
   }
 
-  // BUILD ORDERED LIST (images are NOT separated out — they use same base grouping)
   function buildOrderedList(files){
     const groups = new Map();
     (files||[]).forEach(f=>{
@@ -442,13 +494,11 @@
       try{ return parseParts(f.name||'').base === baseKey; } catch(e){ return false; }
     }).filter(f=>f.url);
     if(!files.length){ copyText(`Aucun fichier trouvé pour: ${baseKey}`); return; }
-    // same copyGroup logic as before - omitted here for brevity
     let out = '';
     files.forEach(f => { out += `${f.name || '(sans nom)'}\n${f.url || ''}\n\n`; });
     copyText(out.trim());
   }
 
-  // ---------- incremental DOM helpers ----------
   function snapshotVideosInNodes(nodes){
     const map = new Map();
     try {
@@ -483,20 +533,17 @@
             videoEl.setAttribute('playsinline','');
             found.parentElement.replaceChild(videoEl, found);
           } else {
-            // important: if no placeholder found, DO NOTHING — do not move video to top.
           }
         } catch(e){}
       }
     } catch(e){}
   }
 
-  // Replace or insert only a single group's DOM nodes (keeps images & videos inside their group)
   function replaceGroupDOM(baseKey){
     if(!baseKey) return;
     const listEl = document.getElementById('fileList');
     const children = Array.from(listEl.children);
 
-    // find existing group range
     let startIdx = -1, endIdx = children.length;
     for(let i=0;i<children.length;i++){
       const ch = children[i];
@@ -512,24 +559,20 @@
       }
     }
 
-    // compute current group's files from window.allFiles
     const groupFiles = (window.allFiles || []).filter(f => {
       try { return parseParts(f.name||'').base === baseKey; } catch(e){ return false; }
     });
 
     if(groupFiles.length === 0){
-      // remove old range if exists
       if(startIdx !== -1){
         const nodesToRemove = children.slice(startIdx, endIdx);
         const preserved = snapshotVideosInNodes(nodesToRemove);
         for(let k = startIdx; k < endIdx; k++){ if(listEl.children[startIdx]) listEl.removeChild(listEl.children[startIdx]); }
-        // do NOT prepend preserved videos anywhere — leave them detached to avoid moving them
       }
       updateEmpty();
       return;
     }
 
-    // build fragment for group using buildOrderedList on groupFiles
     const ordered = buildOrderedList(groupFiles);
     const frag = document.createDocumentFragment();
     let videoCount = 0;
@@ -543,21 +586,17 @@
       if(isVideo && createVideo) videoCount++;
     }
 
-    // snapshot videos only from existing nodes belonging to this group
     const existingNodes = (startIdx !== -1) ? children.slice(startIdx, endIdx) : [];
     const preserved = snapshotVideosInNodes(existingNodes);
 
-    // restore preserved videos into frag by matching data-url placeholders
     const wrapper = document.createElement('div'); wrapper.appendChild(frag);
     restoreVideosToFragment(wrapper, preserved);
 
-    // perform DOM replacement/insert
     if(startIdx !== -1){
       for(let k = startIdx; k < endIdx; k++){ if(listEl.children[startIdx]) listEl.removeChild(listEl.children[startIdx]); }
       const ref = listEl.children[startIdx] || null;
       while(wrapper.firstChild) listEl.insertBefore(wrapper.firstChild, ref);
     } else {
-      // insert at proper index according to global group ordering
       const fullOrdered = buildOrderedList(window.allFiles || []);
       const groupOrder = fullOrdered.filter(x=>x.__groupHeader).map(g=>g.base);
       const myIndex = groupOrder.indexOf(baseKey);
@@ -580,33 +619,25 @@
     updateEmpty();
   }
 
-  // Insert/update new file into window.allFiles in correct global order, then replace only its group DOM
   function applyIncrementalFile(file){
     if(!file || !file.url) return;
     const nf = { name:file.name, url:file.url, size: toNum(file.size), lastModified: toNum(file.lastModified), thumbnail: file.thumbnail || null, __serverIndex: (typeof file.__serverIndex === 'number' ? file.__serverIndex : undefined) };
 
-    // remove old entry same url
     window.allFiles = (window.allFiles || []).filter(x => x.url !== nf.url);
-
-    // push nf into list
     window.allFiles.push(nf);
 
-    // dedupe by url preserving order
     const seen = new Set(), uniq = [];
     for(const it of window.allFiles){ if(!it || !it.url) continue; if(seen.has(it.url)) continue; seen.add(it.url); uniq.push(it); }
     window.allFiles = uniq;
 
-    // compute global ordered arrangement using buildOrderedList and flatten only file entries (exclude headers)
     const orderedWithHeaders = buildOrderedList(window.allFiles || []);
     const flattened = orderedWithHeaders.filter(x => !x.__groupHeader && !x.__seasonHeader);
     window.allFiles = flattened.slice(0, CONFIG.METADATA_CAP);
 
-    // replace only this file's group DOM (so images stay in the correct group's internal order)
     const baseKey = (() => { try { return parseParts(nf.name||'').base; } catch(e) { return normalizeString((nf.name||'').replace(/\.[^.]+$/,'')); } })();
     replaceGroupDOM(baseKey);
   }
 
-  // MAIN message handler now applies incremental updates immediately (no move of unrelated items)
   function handleServerMsg(msg){
     if(!msg || !msg.type) return;
     const normFile = f => ({ name:f.name, url:f.url, size: toNum(f.size), lastModified: toNum(f.lastModified), thumbnail: f.thumbnail || null, __serverIndex: (typeof f.__serverIndex === 'number' ? f.__serverIndex : undefined) });
@@ -620,7 +651,6 @@
     }
 
     if((msg.type === 'add' || msg.type === 'update') && msg.file){
-      // apply immediately and silently to affected group
       applyIncrementalFile(msg.file);
       return;
     }
@@ -653,7 +683,6 @@
     for(const m of batch) try{ handleServerMsg(m); } catch(e){ console.error(e); }
   }, CONFIG.BATCH_FLUSH_MS);
 
-  // snapshot & restore for full rerender (keeps playback) - used by loadFiles/fullRerender
   function snapshotPlayingVideos(){
     const map = new Map();
     try {
@@ -697,7 +726,6 @@
     restorePlayingVideos(preserved);
   }
 
-  // RENDERING + helpers (same chunked rendering as before)
   function renderNextChunk(){
     const listEl = document.getElementById('fileList');
     const source = (window.viewFiles && window.viewFiles.length) ? window.viewFiles : buildOrderedList(window.allFiles||[]);
@@ -804,7 +832,6 @@
   function copyUrl(url){ if(!url) return; if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(url).catch(()=>{}); else { const ta=document.createElement('textarea'); ta.value=url; document.body.appendChild(ta); ta.select(); try{ document.execCommand('copy'); }catch(e){} ta.remove(); } }
   window.copyUrl = copyUrl;
 
-  // minimal placeholders (we no longer use silentLogCache logic for add/update)
   document.getElementById('showNewBtn').style.display = 'none';
   document.getElementById('newIndicator').style.display = 'none';
 
