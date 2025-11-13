@@ -240,6 +240,78 @@ app.use(async (req, res, next) => {
   }
 });
 
+app.delete('/sup/:id', async (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!id) return res.status(400).json({ ok: false, error: 'missing id' });
+    const setId = req.query.set || null;
+    const dry = String(req.query.dry || 'false') === 'true';
+    let targetConfigs = configs;
+    if (setId) {
+      const cfg = configs.find(c => c.id === setId);
+      if (!cfg) return res.status(404).json({ ok: false, error: 'set not found', set: setId });
+      targetConfigs = [cfg];
+    }
+    const results = [];
+    for (const cfg of targetConfigs) {
+      if (cfg.error) {
+        results.push({ set: cfg.id, bucket: cfg.bucket || null, error: cfg.error });
+        continue;
+      }
+      try {
+        const objs = await listAllObjectsPaginated(cfg);
+        const toDelete = objs
+          .filter(o => {
+            if (!o || !o.Key) return false;
+            const k = String(o.Key);
+            if (k === id) return true;
+            if (k.startsWith(id)) return true;
+            if (k.includes(id + ' ')) return true;
+            if (k.includes(id + ' -')) return true;
+            if (k.includes(id + '_')) return true;
+            if (k.includes(id + '.')) return true;
+            if (k.includes(id + '-')) return true;
+            if (k.includes(id)) return true;
+            return false;
+          })
+          .map(o => String(o.Key));
+        if (!toDelete.length) {
+          results.push({ set: cfg.id, bucket: cfg.bucket, deleted: 0, items: [] });
+          continue;
+        }
+        if (dry) {
+          results.push({ set: cfg.id, bucket: cfg.bucket, deleted: 0, dry: true, items: toDelete.slice(0, 1000) });
+          continue;
+        }
+        const batches = chunkArray(toDelete, 1000);
+        const deletedNames = [];
+        const errors = [];
+        for (const batch of batches) {
+          const delReq = {
+            Bucket: cfg.bucket,
+            Delete: { Objects: batch.map(k => ({ Key: k })) },
+          };
+          try {
+            const delResp = await cfg.client.send(new DeleteObjectsCommand(delReq));
+            const deleted = delResp.Deleted || [];
+            const err = delResp.Errors || [];
+            deleted.forEach(d => deletedNames.push(d.Key));
+            err.forEach(e => errors.push({ Key: e.Key, Code: e.Code, Message: e.Message }));
+          } catch (e) {
+            errors.push({ error: String(e) });
+          }
+        }
+        results.push({ set: cfg.id, bucket: cfg.bucket, deleted: deletedNames.length, items: deletedNames, errors });
+      } catch (e) {
+        results.push({ set: cfg.id, bucket: cfg.bucket, error: String(e) });
+      }
+    }
+    return res.json({ ok: true, id, dry: !!dry, results });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
 app.use(express.static('public', { extensions: ['html'] }));
 
 app.get('/files', async (req, res) => {
