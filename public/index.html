@@ -127,17 +127,34 @@
     if(!hasSeason && !hasEp){ const nums = Array.from((rawNorm.match(/\d{1,6}/g) || []).map(x => Number(x))); if(nums.length) numericToken = nums[nums.length - 1]; }
 
     let baseRaw = rawNorm;
+
+    // si gen season/ep, retire tokens SxxExx/E- - Season/Episode...
     if(hasSeason || hasEp){
       baseRaw = baseRaw.replace(/[sS][\s._\-:]*0*(\d{1,3})[\s._\-]*[eE][\s._\-:]*0*(\d{1,3})/g,' ');
       baseRaw = baseRaw.replace(/[eE][\s._\-:]*0*(\d{1,3})[\s._\-]*[sS][\s._\-:]*0*(\d{1,3})/g,' ');
       baseRaw = baseRaw.replace(/\b(?:season|saison)[\s._\-:]*0*(\d{1,3})\b/ig,' ');
       baseRaw = baseRaw.replace(/\b(?:ep(?:isode)?|episode|[eE])[\s._\-:]*0*(\d{1,3})\b/ig,' ');
     } else if(numericToken != null){
-      // IMPORTANT: remove ALL occurrences of the numeric token so files like "Name 01", "Name 1", "Name - 1" share same base
-      baseRaw = baseRaw.replace(new RegExp('\\b' + String(numericToken) + '\\b', 'g'), ' ');
+      // retire tout occurrences nan numericToken (ak zewo devan)
+      baseRaw = baseRaw.replace(new RegExp('\\b0*' + String(numericToken) + '\\b','g'), ' ');
     }
 
-    baseRaw = baseRaw.replace(/\b(vf|vostfr|vost|fr|sub|dub)\b/gi,'').replace(/\s+/g,' ').trim();
+    // retire mo site / noise ki komen
+    baseRaw = baseRaw.replace(/\b(voiranime|voir-anime|voiranime\.com|anime|stream|watch|vf|vostfr|vost|fr|sub|dub)\b/gi,' ');
+
+    // Si tit la repete (eg "Title Title 08 08"), eseye collapse to one occurrence
+    baseRaw = baseRaw.replace(/\s+/g,' ').trim();
+    const words = baseRaw.split(/\s+/).filter(Boolean);
+    if(words.length >= 4){
+      for(let len = Math.floor(words.length/2); len >= 2; len--){
+        const first = words.slice(0,len).join(' ');
+        const second = words.slice(len, len*2).join(' ');
+        if(first === second){ baseRaw = first; break; }
+      }
+    }
+
+    baseRaw = baseRaw.replace(/\s+/g,' ').trim();
+
     const base = normalizeString(baseRaw || rawNorm);
 
     return { base, season: (season != null) ? toNum(season) : null, ep: (ep != null) ? toNum(ep) : null, numericToken: (numericToken != null) ? Number(numericToken) : null, leadingNumeric: leadingNumeric, hasSeason: !!hasSeason, hasEp: !!hasEp, raw: rawNorm };
@@ -197,10 +214,8 @@
       if(s != null && e != null && e !== '') return `${basePretty} Saison ${s} ep ${e}`;
       if(s != null && (e === '' || e == null)) return `${basePretty} Saison ${s}`;
     }
-    // === MODIF : si on a une displaySeason synthétisée, on affiche seulement le nom de base (pas "Saison X")
+    // USER REQUEST: when __displaySeason exists, return only basePretty (no "Saison X")
     if(f.__displaySeason != null){
-      const s = f.__displaySeason;
-      // on garde le titre simple (base) — les en-têtes de saison/ep sont gérés ailleurs
       return basePretty;
     }
     const rawName = removeBracketed((f.name || '').replace(/\.[^.]+$/,''));
@@ -295,13 +310,15 @@
     (files||[]).forEach(f=>{
       try {
         const p = parseParts(f.name||'');
-        const baseKey = (p && p.base) ? p.base : normalizeString((f.name||'').replace(/\.[^.]+$/,'')) || (f.name||'').replace(/\.[^.]+$/,'');
+        // si base vid, fallback retire tout chiffres pou evite "Title 1" rete separe
+        const baseKey = (p && p.base) ? p.base : normalizeString((f.name||'').replace(/\.[^.]+$/,'').replace(/\b\d+\b/g,''));
         if(!groups.has(baseKey)) groups.set(baseKey,[]);
         groups.get(baseKey).push(f);
       } catch(e) {
-        const fallback = (f.name||'').replace(/\.[^.]+$/,'');
-        if(!groups.has(fallback)) groups.set(fallback,[]);
-        groups.get(fallback).push(f);
+        const fallback = (f.name||'').replace(/\.[^.]+$/,'').replace(/\b\d+\b/g,'');
+        const fbNorm = normalizeString(fallback);
+        if(!groups.has(fbNorm)) groups.set(fbNorm,[]);
+        groups.get(fbNorm).push(f);
       }
     });
 
@@ -335,21 +352,19 @@
         numMap.get(key).push(ni);
       }
 
+      // --- MODIFIÉ: toujou asiyen season:1 epi ep = numericToken pou tout fichye numeric ---
       const synthesized = [];
       for(const [numKey, arr] of numMap.entries()){
+        // kenbe yon lòd deterministik (pi ansyen premye)
         arr.sort((a,b) => toNum(a.it.lastModified) - toNum(b.it.lastModified));
-        if(arr.length === 1){
-          const item = arr[0].it;
+        // asiyen season = 1 ak ep = Number(numKey) pou tout atik ki pataje menm numericToken
+        for (let i = 0; i < arr.length; i++) {
+          const item = arr[i].it;
           item.__synth = { season: 1, ep: Number(numKey) };
           synthesized.push(item);
-        } else {
-          for(let i=0;i<arr.length;i++){
-            const item = arr[i].it;
-            item.__synth = { season: i+1, ep: Number(numKey) };
-            synthesized.push(item);
-          }
         }
       }
+      // --- FIN MODIFICATION ---
 
       out.push({ __groupHeader:true, base:g.base, newest:g.newest });
 
@@ -579,7 +594,7 @@
     const flattened = orderedWithHeaders.filter(x => !x.__groupHeader && !x.__seasonHeader);
     window.allFiles = flattened.slice(0, CONFIG.METADATA_CAP);
 
-    const baseKey = (() => { try { return parseParts(nf.name||'').base; } catch(e) { return normalizeString((nf.name||'').replace(/\.[^.]+$/,'')); } })();
+    const baseKey = (() => { try { return parseParts(nf.name||'').base; } catch(e) { return normalizeString((nf.name||'').replace(/\.[^.]+$/,'').replace(/\b\d+\b/g,'')); } })();
     replaceGroupDOM(baseKey);
   }
 
