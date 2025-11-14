@@ -334,17 +334,33 @@
         numMap.get(key).push(ni);
       }
 
+      const existingEpSeasonMap = new Map();
+      for(const it of explicitSeason){
+        const p = parseParts(it.name || '');
+        if(p.hasEp && p.ep != null){
+          const key = String(p.ep);
+          const arr = existingEpSeasonMap.get(key) || [];
+          const s = (p.season != null) ? Number(p.season) : 1;
+          arr.push(s);
+          existingEpSeasonMap.set(key, arr);
+        } else if(p.hasSeason && (p.ep == null)){
+          // nothing to map for explicit season-only without ep
+        }
+      }
+
       const synthesized = [];
       for(const [numKey, arr] of numMap.entries()){
         arr.sort((a,b) => toNum(a.it.lastModified) - toNum(b.it.lastModified));
+        const existing = existingEpSeasonMap.get(numKey) || [];
+        const start = existing.length ? Math.max(...existing) : 0;
         if(arr.length === 1){
           const item = arr[0].it;
-          item.__synth = { season: 1, ep: Number(numKey) };
+          item.__synth = { season: start + 1, ep: Number(numKey) };
           synthesized.push(item);
         } else {
           for(let i=0;i<arr.length;i++){
             const item = arr[i].it;
-            item.__synth = { season: i+1, ep: Number(numKey) };
+            item.__synth = { season: start + i + 1, ep: Number(numKey) };
             synthesized.push(item);
           }
         }
