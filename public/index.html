@@ -205,6 +205,7 @@ baseRaw = baseRaw.replace(/\b(vf|vostfr|vost|fr|sub|dub)\b/gi, '').replace(/\s+/
     return collator.compare(aNoExt,bNoExt);
   }
 
+  
   function createGroupHeader(f){
     const head = document.createElement('div'); head.className = 'group-head';
     try { head.dataset.base = f.base || ''; } catch(e){}
