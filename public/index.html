@@ -124,27 +124,20 @@
     if(!hasEp){ m = rawNorm.match(/\b(?:ep(?:isode)?|episode|[eE])[\s._\-:]*0*(\d{1,3})\b/i); if(m){ ep = toNum(m[1] || m[0].replace(/\D/g,'')); hasEp = true; } }
 
     let numericToken = null;
-if (!hasSeason && !hasEp) {
-  const nums = Array.from((rawNorm.match(/\d{1,6}/g) || []).map(x => Number(x)));
-  if (nums.length) numericToken = nums[nums.length - 1];
-}
+    if(!hasSeason && !hasEp){ const nums = Array.from((rawNorm.match(/\d{1,6}/g) || []).map(x => Number(x))); if(nums.length) numericToken = nums[nums.length - 1]; }
 
-let baseRaw = rawNorm;
-if (hasSeason || hasEp) {
-  // retire tokens season/ep si yo egziste (kenbe menm jan)
-  baseRaw = baseRaw.replace(/[sS][\s._\-:]*0*(\d{1,3})[\s._\-]*[eE][\s._\-:]*0*(\d{1,3})/g, ' ');
-  baseRaw = baseRaw.replace(/[eE][\s._\-:]*0*(\d{1,3})[\s._\-]*[sS][\s._\-:]*0*(\d{1,3})/g, ' ');
-  baseRaw = baseRaw.replace(/\b(?:season|saison)[\s._\-:]*0*(\d{1,3})\b/ig, ' ');
-  baseRaw = baseRaw.replace(/\b(?:ep(?:isode)?|episode|[eE])[\s._\-:]*0*(\d{1,3})\b/ig, ' ');
-} else if (numericToken != null) {
-  // retire dènye aparisyon numericToken nan rawNorm (pi robust pase regex fen-chenn)
-  const tokenStr = String(numericToken);
-  const idx = baseRaw.toLowerCase().lastIndexOf(tokenStr.toLowerCase());
-  if (idx !== -1) {
-    // retire nimewo sèlman (pa retire lòt karaktè)
-    baseRaw = baseRaw.slice(0, idx) + baseRaw.slice(idx + tokenStr.length);
-  }
+    let baseRaw = rawNorm;
+    if(hasSeason || hasEp){
+      baseRaw = baseRaw.replace(/[sS][\s._\-:]*0*(\d{1,3})[\s._\-]*[eE][\s._\-:]*0*(\d{1,3})/g,' ');
+      baseRaw = baseRaw.replace(/[eE][\s._\-:]*0*(\d{1,3})[\s._\-]*[sS][\s._\-:]*0*(\d{1,3})/g,' ');
+      baseRaw = baseRaw.replace(/\b(?:season|saison)[\s._\-:]*0*(\d{1,3})\b/ig,' ');
+      baseRaw = baseRaw.replace(/\b(?:ep(?:isode)?|episode|[eE])[\s._\-:]*0*(\d{1,3})\b/ig,' ');
+    } else if(numericToken != null){
+      baseRaw = baseRaw.replace(new RegExp('\\b' + String(numericToken) + '\\b' + '\\s*$'), ' ');
     }
+
+    baseRaw = baseRaw.replace(/\b(vf|vostfr|vost|fr|sub|dub)\b/gi,'').replace(/\s+/g,' ').trim();
+    const base = normalizeString(baseRaw || rawNorm);
 
     return { base, season: (season != null) ? toNum(season) : null, ep: (ep != null) ? toNum(ep) : null, numericToken: (numericToken != null) ? Number(numericToken) : null, leadingNumeric: leadingNumeric, hasSeason: !!hasSeason, hasEp: !!hasEp, raw: rawNorm };
   }
@@ -341,21 +334,19 @@ if (hasSeason || hasEp) {
         numMap.get(key).push(ni);
       }
 
+      // --- MODIFIÉ: toujours asiyen season:1 epi ep = numericToken pou tout fichye numeric ---
       const synthesized = [];
       for(const [numKey, arr] of numMap.entries()){
+        // kenbe yon lòd deterministik (pi ansyen premye)
         arr.sort((a,b) => toNum(a.it.lastModified) - toNum(b.it.lastModified));
-        if(arr.length === 1){
-          const item = arr[0].it;
+        // asiyen season = 1 ak ep = Number(numKey) pou tout atik ki pataje menm numericToken
+        for (let i = 0; i < arr.length; i++) {
+          const item = arr[i].it;
           item.__synth = { season: 1, ep: Number(numKey) };
           synthesized.push(item);
-        } else {
-          for(let i=0;i<arr.length;i++){
-            const item = arr[i].it;
-            item.__synth = { season: i+1, ep: Number(numKey) };
-            synthesized.push(item);
-          }
         }
       }
+      // --- FIN MODIFICATION ---
 
       out.push({ __groupHeader:true, base:g.base, newest:g.newest });
 
@@ -802,4 +793,4 @@ if (hasSeason || hasEp) {
 })();
   </script>
 </body>
-  </html>
+    </html>
