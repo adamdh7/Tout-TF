@@ -4,6 +4,13 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,minimum-scale=1,user-scalable=no" />
   <title>TF-Stream-7</title>
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#2563eb" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="TF-Stream-Url" />
+  <link rel="apple-touch-icon" href="https://res.cloudinary.com/dckwrqrur/image/upload/v1755996395/tf-stream-url/tfstream-text-only_mo4wml.png" />
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display",sans-serif;background:#f9f9fb;color:#111;margin:0}
@@ -795,7 +802,7 @@
   document.getElementById('showNewBtn').style.display = 'none';
   document.getElementById('newIndicator').style.display = 'none';
 
-  function connectInitial(){
+function connectInitial(){
     loadFiles();
     connectWebSocket();
     setTimeout(()=>{ if(!ws) startSSE(); }, 1500);
@@ -808,7 +815,19 @@
   document.addEventListener('gesturestart', function(e){ try{ e.preventDefault(); }catch(e){} });
   document.addEventListener('touchmove', function(e){ try{ if(e.scale !== undefined && e.scale !== 1) e.preventDefault(); }catch(e){} }, { passive:false });
 
-})();
+  // Service worker registration INSIDE the IIFE (sa pi pwòp)
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js')
+        .then(reg => { console.log('Service worker registered.', reg); })
+        .catch(err => { console.warn('Service worker registration failed:', err); });
+    });
+  }
+
+})(); 
+</script>
+</body>
+</html>
   </script>
 </body>
   </html>
